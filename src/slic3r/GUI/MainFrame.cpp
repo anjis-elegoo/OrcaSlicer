@@ -1936,6 +1936,7 @@ wxBoxSizer* MainFrame::create_side_tools()
     sizer->Layout();
 
     m_filament_group_popup = new FilamentGroupPopup(m_slice_btn);
+    m_generic_filament_group_popup = new GenericFilamentGroupPopup(m_slice_btn);
 
     auto try_hover_pop_up = [this]() {
 #ifdef __APPLE__
@@ -1947,8 +1948,13 @@ wxBoxSizer* MainFrame::create_side_tools()
         pos.y += m_slice_btn->GetRect().height * 1.25;
         pos.x -= (m_slice_option_btn->GetRect().width + FromDIP(380) * 0.6);
         auto curr_plate = this->m_plater->get_partplate_list().get_curr_plate();
-        m_filament_group_popup->SetPosition(pos);
-        m_filament_group_popup->tryPopup(m_plater, curr_plate, m_slice_select == eSliceAll);
+        if (wxGetApp().preset_bundle->is_bbl_vendor()) {
+            m_filament_group_popup->SetPosition(pos);
+            m_filament_group_popup->tryPopup(m_plater, curr_plate, m_slice_select == eSliceAll);
+        } else {
+            m_generic_filament_group_popup->SetPosition(pos);
+            m_generic_filament_group_popup->tryPopup(m_plater, curr_plate, m_slice_select == eSliceAll);
+        }
         };
 
 #ifndef __linux__
@@ -1961,6 +1967,7 @@ wxBoxSizer* MainFrame::create_side_tools()
 
     slice_panel->Bind(wxEVT_LEAVE_WINDOW, [this](auto& event) {
         m_filament_group_popup->tryClose();
+        m_generic_filament_group_popup->tryClose();
         });
 
     m_slice_btn->Bind(wxEVT_ENTER_WINDOW, [this, try_hover_pop_up](auto& event) {
@@ -1970,6 +1977,7 @@ wxBoxSizer* MainFrame::create_side_tools()
 
     m_slice_btn->Bind(wxEVT_LEAVE_WINDOW, [this](auto& event) {
         m_filament_group_popup->tryClose();
+        m_generic_filament_group_popup->tryClose();
         });
 #endif
 

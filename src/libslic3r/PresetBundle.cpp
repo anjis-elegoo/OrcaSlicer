@@ -71,6 +71,20 @@ static std::vector<std::string> s_project_options {
     "enable_filament_dynamic_map"
 };
 
+// A grouped multi-nozzle printer may have more logical filaments than physical
+// nozzles. Keep every 3MF load path on the same logical count source instead of
+// falling back to a nozzle-sized filament option.
+static size_t get_project_filament_count(const DynamicPrintConfig &config)
+{
+    if (const auto *colors = config.option<ConfigOptionStrings>("filament_colour"); colors && !colors->values.empty())
+        return colors->values.size();
+    if (const auto *presets = config.option<ConfigOptionStrings>("filament_settings_id"); presets && !presets->values.empty())
+        return presets->values.size();
+    if (const auto *diameters = config.option<ConfigOptionFloats>("filament_diameter"); diameters)
+        return diameters->values.size();
+    return 0;
+}
+
 //Orca: add custom as default
 const char *PresetBundle::ORCA_DEFAULT_BUNDLE = "Custom";
 const char *PresetBundle::ORCA_DEFAULT_PRINTER_MODEL = "MyKlipper 0.4 nozzle";
@@ -2059,8 +2073,9 @@ int PresetBundle::validate_presets(const std::string &file_name, DynamicPrintCon
     if (has_different_settings_to_system)
         different_values = config.option<ConfigOptionStrings>("different_settings_to_system", true)->values;
 
-    //PrinterTechnology printer_technology = Preset::printer_technology(config);
-    size_t filament_count = config.option<ConfigOptionFloats>("filament_diameter")->values.size();
+    // Use the same logical filament count as the project loader. In grouping
+    // mode this may be greater than the physical nozzle count.
+    size_t filament_count = get_project_filament_count(config);
     inherits_values.resize(filament_count + 2, std::string());
     different_values.resize(filament_count + 2, std::string());
     filament_preset_name.resize(filament_count, std::string());
@@ -2078,8 +2093,8 @@ int PresetBundle::validate_presets(const std::string &file_name, DynamicPrintCon
         std::string filament_preset = filament_preset_name[index];
         std::string filament_inherits = inherits_values[index+1];
 
-        // filament_preset_name is padded up to filament_count from filament_diameter. Unfilled
-        // slots have no assigned preset, so there's nothing to validate or warn about.
+        // filament_preset_name is padded up to the logical filament count. Unfilled slots have
+        // no assigned preset, so there's nothing to validate or warn about.
         if (filament_preset.empty())
             continue;
 
@@ -3912,6 +3927,12 @@ int PresetBundle::get_printer_extruder_count() const
     return count;
 }
 
+bool PresetBundle::is_multiple_filaments_per_nozzle_supported()
+{
+    const Preset &printer_preset = this->printers.get_edited_preset();
+    return this->is_bbl_vendor() || is_multiple_filaments_per_nozzle_enabled(printer_preset.config);
+}
+
 void PresetBundle::update_filament_count()
 {
     if (printers.get_edited_preset().printer_technology() != ptFFF)
@@ -4021,8 +4042,20 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
 	out.apply(this->printers.get_edited_preset().config);
     out.apply(this->project_config);
 
-    // BBS
-    size_t  num_filaments = this->filament_presets.size();
+    // Generic grouped printers keep their logical filament slots independently
+    // from the physical nozzle count. Other printer types retain the established
+    // filament_presets-based count so intermediate project state cannot truncate
+    // or duplicate their material configuration.
+    std::vector<std::string> filament_preset_names = this->filament_presets;
+    if (filament_preset_names.empty())
+        filament_preset_names.emplace_back(this->filaments.get_selected_preset_name());
+    size_t num_filaments = filament_preset_names.size();
+    if (is_multiple_filaments_per_nozzle_enabled(out)) {
+        const size_t project_filament_count = get_project_filament_count(out);
+        if (project_filament_count > 0)
+            num_filaments = project_filament_count;
+    }
+    filament_preset_names.resize(num_filaments, filament_preset_names.back());
 
     std::vector<int> filament_maps = out.option<ConfigOptionInts>("filament_map")->values;
     std::vector<int> filament_volume_maps(num_filaments, (int)nvtStandard);
@@ -4108,7 +4141,7 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
         compatible_prints_condition  .emplace_back(this->filaments.get_edited_preset().compatible_prints_condition());
         //BBS: add logic for settings check between different system presets
         //std::string filament_inherits = this->filaments.get_edited_preset().inherits();
-        std::string current_preset_name = this->filament_presets[0];
+        std::string current_preset_name = filament_preset_names[0];
         const Preset* preset = this->filaments.find_preset(current_preset_name, true);
         std::string filament_inherits = preset->inherits();
         inherits                     .emplace_back(filament_inherits);
@@ -4134,7 +4167,7 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
         // Here this->filaments.find_preset() and this->filaments.first_visible() return the edited copy of the preset if active.
         std::vector<const DynamicPrintConfig*> filament_configs;
         std::vector<const Preset*> filament_presets;
-        for (const std::string& filament_preset_name : this->filament_presets) {
+        for (const std::string& filament_preset_name : filament_preset_names) {
             const Preset* preset = this->filaments.find_preset(filament_preset_name, true);
             filament_presets.emplace_back(preset);
             filament_configs.emplace_back(&(preset->config));
@@ -4294,7 +4327,7 @@ DynamicPrintConfig PresetBundle::full_fff_config(bool apply_extruder, std::optio
             opt->value = 0;
     }
     out.option<ConfigOptionString >("print_settings_id",    true)->value  = this->prints.get_selected_preset_name();
-    out.option<ConfigOptionStrings>("filament_settings_id", true)->values = this->filament_presets;
+    out.option<ConfigOptionStrings>("filament_settings_id", true)->values = std::move(filament_preset_names);
     out.option<ConfigOptionString >("printer_settings_id",  true)->value  = this->printers.get_selected_preset_name();
     out.option<ConfigOptionStrings>("filament_ids", true)->values = filament_ids;
     out.option<ConfigOptionInts>("filament_map", true)->values = filament_maps;
@@ -4444,19 +4477,11 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
     // drop it from any imported config so it only comes from the connected printer.
     config.erase("enable_filament_dynamic_map");
 
-#if 0
-    size_t num_extruders = (printer_technology == ptFFF) ?
-        std::min(config.option<ConfigOptionFloats>("nozzle_diameter"  )->values.size(),
-                 config.option<ConfigOptionFloats>("filament_diameter")->values.size()) :
-		// 1 SLA material
-        1;
-#else
-    // BBS: use filament_colour insteadof filament_settings_id, filament_settings_id sometimes is not generated
-    ConfigOptionStrings* filament_colour_option = config.option<ConfigOptionStrings>("filament_colour");
-    size_t num_filaments = filament_colour_option?filament_colour_option->size():0;
+    // Grouped multi-nozzle projects may contain more logical filaments than
+    // nozzles. Do not cap the load count to nozzle_diameter.
+    size_t num_filaments = get_project_filament_count(config);
     if (num_filaments == 0)
         throw Slic3r::RuntimeError(std::string("Invalid configuration file: ") + name_or_path);
-#endif
 
     //BBS: add config related logs
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": , name_or_path %1%, is_external %2%, num_filaments %3%") % name_or_path % is_external % num_filaments;
@@ -4606,7 +4631,14 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
 
         // 3) Now load the filaments. If there are multiple filament presets, split them and load them.
         auto old_filament_profile_names = config.option<ConfigOptionStrings>("filament_settings_id", true);
-        old_filament_profile_names->values.resize(num_filaments, std::string());
+        // Older grouped projects may have stored only one preset name per
+        // physical nozzle. Reuse the last known preset for the missing logical
+        // slots instead of creating anonymous "(project.3mf)" presets.
+        std::string fallback_filament_profile;
+        for (const std::string &profile_name : old_filament_profile_names->values)
+            if (!profile_name.empty())
+                fallback_filament_profile = profile_name;
+        old_filament_profile_names->values.resize(num_filaments, fallback_filament_profile);
 
         auto old_machine_profile_name = config.option<ConfigOptionString>("printer_settings_id", true);
 
@@ -5357,28 +5389,54 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
 
     auto* nozzle_diameter = static_cast<const ConfigOptionFloats*>(printers.get_edited_preset().config.option("nozzle_diameter"));
     size_t num_extruders  = nozzle_diameter->values.size();
-    if (num_extruders > num_filaments) { // Verify validity of the current filament presets.
-        for (size_t i = 0; i < std::min(this->filament_presets.size(), num_extruders); ++i)
+    const bool generic_multiple_filaments = is_multiple_filaments_per_nozzle_enabled(printers.get_edited_preset().config);
+    size_t required_filaments = num_extruders;
+    if (generic_multiple_filaments) {
+        // In the generic grouped mode physical nozzles may be left unused, so the logical
+        // filament count is independent of (and may be smaller than) the nozzle count.
+        required_filaments = get_project_filament_count(project_config);
+        if (required_filaments == 0)
+            required_filaments = std::max<size_t>(num_filaments, 1);
+    } else {
+        const bool supports_multiple_filaments =
+            printers.get_edited_preset().config.opt_bool("single_extruder_multi_material") ||
+            is_multiple_filaments_per_nozzle_supported();
+        if (supports_multiple_filaments)
+            required_filaments = std::max(required_filaments, get_project_filament_count(project_config));
+    }
+
+    if (required_filaments > num_filaments) { // Verify validity of the current filament presets.
+        for (size_t i = 0; i < std::min(this->filament_presets.size(), required_filaments); ++i)
             this->filament_presets[i] = this->filaments.find_preset(this->filament_presets[i], true)->name;
         // Append the rest of filament presets.
-        this->filament_presets.resize(num_extruders, this->filament_presets.empty() ? this->filaments.first_visible().name :
-                                                                                      this->filament_presets.back());
-        num_filaments = this->filament_presets.size();
+        this->filament_presets.resize(required_filaments, this->filament_presets.empty() ? this->filaments.first_visible().name :
+                                                                                           this->filament_presets.back());
+    } else if (generic_multiple_filaments && required_filaments < num_filaments) {
+        this->filament_presets.resize(required_filaments);
     }
+    num_filaments = this->filament_presets.size();
     if (to_delete_filament_id == -1)
         to_delete_filament_id = num_filaments;
 
     // Now verify if flush_volumes_matrix has proper size (it is used to deduce number of extruders in wipe tower generator):
     std::vector<double> old_matrix = this->project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
     size_t old_nozzle_nums = this->project_config.option<ConfigOptionFloats>("flush_multiplier")->values.size();
-    size_t old_number_of_filaments = size_t(sqrt(old_matrix.size() / old_nozzle_nums) + EPSILON);
+    // Empty/malformed legacy projects must not make the matrix migration divide by zero or
+    // index a partial nozzle block.
+    old_nozzle_nums = std::max<size_t>(old_nozzle_nums, 1);
+    const size_t old_matrix_size_per_nozzle = old_matrix.size() / old_nozzle_nums;
+    const size_t old_number_of_filaments = size_t(sqrt(old_matrix_size_per_nozzle) + EPSILON);
+    const bool old_matrix_layout_valid = old_matrix.size() == old_nozzle_nums * old_number_of_filaments * old_number_of_filaments;
     size_t nozzle_nums = get_printer_extruder_count();
     if (old_nozzle_nums != nozzle_nums) {
         std::vector<double>& f_multiplier = this->project_config.option<ConfigOptionFloats>("flush_multiplier")->values;
         f_multiplier.resize(nozzle_nums, 1.f);
     }
 
-    if ( (num_filaments * num_filaments) != size_t(old_matrix.size() / old_nozzle_nums) ) {
+    // A printer switch changes the matrix layout even when the logical filament count stays
+    // unchanged: one N*N block becomes one block per physical nozzle. Rebuild on either axis.
+    if (!old_matrix_layout_valid || old_nozzle_nums != nozzle_nums ||
+        num_filaments * num_filaments != old_matrix_size_per_nozzle) {
         // First verify if purging volumes presets for each extruder matches number of extruders
         std::vector<double>& filaments = this->project_config.option<ConfigOptionFloats>("flush_volumes_vector")->values;
         while (filaments.size() < 2* num_filaments) {
@@ -5395,14 +5453,14 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
         std::vector<double> new_matrix(new_matrix_size * nozzle_nums, 0);
         for (unsigned int i = 0; i < num_filaments; ++i)
             for (unsigned int j = 0; j < num_filaments; ++j) {
-                if (i < old_number_of_filaments && j < old_number_of_filaments) {
+                if (old_matrix_layout_valid && i < old_number_of_filaments && j < old_number_of_filaments) {
                     unsigned int old_i = i >= to_delete_filament_id ? i + 1 : i;
                     unsigned int old_j = j >= to_delete_filament_id ? j + 1 : j;
                     for (size_t nozzle_id = 0; nozzle_id < nozzle_nums; ++nozzle_id) {
                         // Orca: only copy from old_matrix when the old layout actually has data
                         // for this nozzle slot; otherwise initialize from the per-filament
                         // flush volumes the same way the (i,j) out-of-range branch does.
-                        if (nozzle_id < old_nozzle_nums) {
+                        if (nozzle_id < old_nozzle_nums && old_i < old_number_of_filaments && old_j < old_number_of_filaments) {
                             new_matrix[i * num_filaments + j + new_matrix_size * nozzle_id] = old_matrix[old_i * old_number_of_filaments + old_j + old_matrix_size * nozzle_id];
                         } else {
                             new_matrix[i * num_filaments + j + new_matrix_size * nozzle_id] = (i == j ? 0. : filaments[2 * i] + filaments[2 * j + 1]);

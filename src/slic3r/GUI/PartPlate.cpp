@@ -1180,8 +1180,9 @@ void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
             }
 
             PresetBundle* preset = wxGetApp().preset_bundle;
-            bool dual_bbl = (preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2);
-            if (dual_bbl) {
+            const int nozzle_count = preset ? preset->get_printer_extruder_count() : 0;
+            bool filament_grouping = nozzle_count > 1 && ((preset->is_bbl_vendor() && nozzle_count == 2) || (!preset->is_bbl_vendor() && preset->is_multiple_filaments_per_nozzle_supported()));
+            if (filament_grouping) {
                 if (hover_id == PLATE_FILAMENT_MAP_ID){
                     render_icon_texture(m_plate_filament_map_icon.model, m_partplate_list->m_plate_set_filament_map_hovered_texture);
                     show_tooltip(_u8L("Filament grouping"));
@@ -1512,10 +1513,10 @@ void PartPlate::register_raycasters_for_picking(GLCanvas3D &canvas)
 		register_model_for_picking(canvas, m_plate_name_edit_icon, picking_id_component(6));
     register_model_for_picking(canvas, m_move_front_icon, picking_id_component(7));
 
-    // Only register filament map button for H2D (dual-extruder Bambu Lab) printers
     PresetBundle* preset = wxGetApp().preset_bundle;
-    bool dual_bbl = (preset && preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2);
-    if (dual_bbl)
+    const int nozzle_count = preset ? preset->get_printer_extruder_count() : 0;
+    bool filament_grouping = preset && nozzle_count > 1 && ((preset->is_bbl_vendor() && nozzle_count == 2) || (!preset->is_bbl_vendor() && preset->is_multiple_filaments_per_nozzle_supported()));
+    if (filament_grouping)
         register_model_for_picking(canvas, m_plate_filament_map_icon, picking_id_component(PLATE_FILAMENT_MAP_ID));
 }
 
@@ -1952,6 +1953,11 @@ std::vector<int> PartPlate::get_used_filaments()
 bool PartPlate::check_filament_printable(const DynamicPrintConfig &config, wxString& error_message)
 {
     error_message.clear();
+    // filament_printable is the Bambu left/right-extruder compatibility bitmask.
+    // Generic printers validate their nozzle assignments in GenericToolOrdering.
+    if (!wxGetApp().preset_bundle->is_bbl_vendor())
+        return true;
+
     FilamentMapMode mode = this->get_real_filament_map_mode(config);
     // only check printablity if we have explicit map result
     if (mode != fmmManual)
@@ -3300,11 +3306,11 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, co
 			calc_vertex_for_icons(3, m_lock_icon);
 			calc_vertex_for_icons(4, m_plate_settings_icon);
 			// ORCA also change bed_icon_count number in calc_vertex_for_icons() after adding or removing icons for circular shaped beds that uses vertical alingment for icons
-			bool dual_bbl = false;
 			PresetBundle* preset = wxGetApp().preset_bundle;
-			dual_bbl = (preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2);
-			calc_vertex_for_icons(dual_bbl ? 5 : 6, m_plate_filament_map_icon);
-			calc_vertex_for_icons(dual_bbl ? 6 : 5, m_move_front_icon);
+			const int nozzle_count = preset ? preset->get_printer_extruder_count() : 0;
+			bool filament_grouping = preset && nozzle_count > 1 && ((preset->is_bbl_vendor() && nozzle_count == 2) || (!preset->is_bbl_vendor() && preset->is_multiple_filaments_per_nozzle_supported()));
+			calc_vertex_for_icons(filament_grouping ? 5 : 6, m_plate_filament_map_icon);
+			calc_vertex_for_icons(filament_grouping ? 6 : 5, m_move_front_icon);
 
 			calc_vertex_for_number(0, false, m_plate_idx_icon);
 			// calc vertex for plate name
@@ -3911,6 +3917,39 @@ void PartPlate::clear_filament_map_mode()
 
 void PartPlate::on_extruder_count_changed(int extruder_count)
 {
+    if (extruder_count <= 0)
+        return;
+
+    PresetBundle *preset_bundle = wxGetApp().preset_bundle;
+    const bool generic_grouping = preset_bundle && !preset_bundle->is_bbl_vendor() &&
+                                  is_multiple_filaments_per_nozzle_enabled(
+                                      preset_bundle->printers.get_edited_preset().config);
+    if (generic_grouping) {
+        // A filament grouping describes a physical nozzle inventory and cannot be migrated
+        // reliably after that inventory changes. Keep the logical filaments, but let the new
+        // printer calculate a fresh grouping.
+        auto& project_config = preset_bundle->project_config;
+        auto& filament_map = project_config.option<ConfigOptionInts>("filament_map")->values;
+        const auto& filament_colors =
+            project_config.option<ConfigOptionStrings>("filament_colour")->values;
+        const size_t filament_count = filament_colors.empty() ? filament_map.size() : filament_colors.size();
+        const FilamentMapMode reset_mode =
+            has_different_nozzle_diameters(preset_bundle->printers.get_edited_preset().config) ?
+                FilamentMapMode::fmmManual : FilamentMapMode::fmmAutoForFlush;
+        filament_map.assign(filament_count, 1);
+        project_config.option<ConfigOptionInts>("filament_volume_map")->values.assign(
+            filament_count, static_cast<int>(NozzleVolumeType::nvtStandard));
+        project_config.option<ConfigOptionInts>("filament_nozzle_map")->values.assign(filament_count, 0);
+        project_config.option<ConfigOptionEnum<FilamentMapMode>>("filament_map_mode")->value = reset_mode;
+
+        clear_filament_map();
+        clear_filament_volume_map();
+        if (m_config.has("filament_nozzle_map"))
+            m_config.erase("filament_nozzle_map");
+        set_filament_map_mode(reset_mode);
+        return;
+    }
+
     if (extruder_count < 2) {
         std::vector<int> f_map = wxGetApp().plater()->get_global_filament_map();
         std::fill(f_map.begin(), f_map.end(), 1);

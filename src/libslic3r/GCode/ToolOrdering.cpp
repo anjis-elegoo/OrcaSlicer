@@ -160,7 +160,7 @@ static double calc_max_layer_height(const PrintConfig &config, double max_object
 // per physical nozzle. For single-nozzle-per-extruder printers (H2D/X1/...) nozzle_id == extruder_id,
 // so every returned value is identical to the extruder-level calculation. Out-of-range
 // filament ids resolve to no nozzle and are skipped.
-static FilamentChangeStats calc_filament_change_info_by_toolorder(const PrintConfig* config, const MultiNozzleUtils::LayeredNozzleGroupResult& group_result, const std::vector<FlushMatrix>& flush_matrix, const std::vector<std::vector<unsigned int>>& layer_sequences)
+FilamentChangeStats ToolOrdering::calc_filament_change_info_by_toolorder(const PrintConfig* config, const MultiNozzleUtils::LayeredNozzleGroupResult& group_result, const std::vector<FlushMatrix>& flush_matrix, const std::vector<std::vector<unsigned int>>& layer_sequences)
 {
     FilamentChangeStats ret;
     std::unordered_map<int, int> flush_volume_per_filament;
@@ -1175,9 +1175,6 @@ float get_flush_volume(const std::vector<int> &filament_maps, const std::vector<
     return flush_volume;
 }
 
-// Forward declaration — the single-nozzle-per-extruder nozzle list (defined below).
-static std::vector<MultiNozzleUtils::NozzleInfo> build_default_nozzle_list(const PrintConfig &print_config, size_t extruder_nums);
-
 // Best-effort readers for the multi-nozzle dev config keys. These are registered in the ConfigDef
 // but not (yet) static PrintConfig members, so the slicing PrintConfig reads them as inert defaults,
 // which keeps the auto grouping path bit-exact (all these degrade to the flush-only, non-switcher
@@ -1476,6 +1473,11 @@ MultiNozzleUtils::LayeredNozzleGroupResult ToolOrdering::get_recommended_filamen
     if (!print || layer_filaments.empty())
         return LayeredNozzleGroupResult();
 
+    const bool generic_grouping = !print->is_BBL_printer() && is_multiple_filaments_per_nozzle_enabled(print->config());
+    if (generic_grouping)
+        return get_recommended_generic_filament_maps(
+            layer_filaments, print, mode, geometric_unprintables);
+
     const auto&  print_config  = print->config();
     size_t       filament_nums = print_config.filament_colour.values.size();
     size_t       extruder_nums = print_config.nozzle_diameter.values.size();
@@ -1609,7 +1611,7 @@ FilamentChangeStats ToolOrdering::get_filament_change_stats(FilamentChangeMode m
 
 // Build one logical nozzle per extruder. This is the single-nozzle grouping:
 // nozzle group_id == extruder_id. Kept file-local.
-static std::vector<MultiNozzleUtils::NozzleInfo> build_default_nozzle_list(const PrintConfig &print_config, size_t extruder_nums)
+std::vector<MultiNozzleUtils::NozzleInfo> ToolOrdering::build_default_nozzle_list(const PrintConfig &print_config, size_t extruder_nums)
 {
     using namespace MultiNozzleUtils;
     std::vector<NozzleInfo> nozzle_list;
@@ -1634,7 +1636,7 @@ static std::vector<MultiNozzleUtils::NozzleInfo> build_default_nozzle_list(const
 // (nozzle_id == extruder_id). For a multi-nozzle printer the config's per-filament nozzle/volume
 // choice is resolved via the 6-argument create (the per-layer engine owns the auto
 // sequential path proper).
-static MultiNozzleUtils::LayeredNozzleGroupResult build_group_result_from_map(
+MultiNozzleUtils::LayeredNozzleGroupResult ToolOrdering::build_group_result_from_map(
     const PrintConfig&               print_config,
     const std::vector<int>&          filament_map_0based,
     const std::vector<unsigned int>& used_filaments)
@@ -1954,6 +1956,12 @@ void ToolOrdering::reorder_extruders_for_minimum_flush_volume(bool reorder_first
 
     if (!print_config || m_layer_tools.empty())
         return;
+
+    const bool generic_grouping = m_print && !m_print->is_BBL_printer() && is_multiple_filaments_per_nozzle_enabled(*print_config);
+    if (generic_grouping) {
+        reorder_generic_extruders_for_minimum_flush_volume(reorder_first_layer);
+        return;
+    }
 
     const unsigned int number_of_extruders = (unsigned int)(print_config->filament_colour.values.size() + EPSILON);
 

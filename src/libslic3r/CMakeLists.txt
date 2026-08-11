@@ -476,6 +476,8 @@ set(lisbslic3r_sources
     MultiNozzleUtils.cpp
     GCode/ToolOrderUtils.hpp
     GCode/ToolOrderUtils.cpp
+    GCode/GenericToolOrderUtils.cpp
+    GCode/GenericToolOrdering.cpp
     FlushVolPredictor.hpp
     FlushVolPredictor.cpp
 )

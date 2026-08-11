@@ -201,7 +201,13 @@ void GCodeWriter::set_extruders(std::vector<unsigned int> extruder_ids)
         (even if prints only uses that one) since we need to output Tx commands
         first extruder has index 0 */
     //ORCA: Fix undefined behavior by checking if the vector is empty before taking max_element.
-    this->multiple_extruders = !extruder_ids.empty() && (*std::max_element(extruder_ids.begin(), extruder_ids.end())) > 0;
+    const bool has_multiple_logical_filaments = !extruder_ids.empty() && (*std::max_element(extruder_ids.begin(), extruder_ids.end())) > 0;
+    const bool uses_nonzero_mapped_nozzle =
+        is_multiple_filaments_per_nozzle_enabled(config) && !m_is_bbl_printers &&
+        std::any_of(m_filament_extruders.begin(), m_filament_extruders.end(), [](const Extruder &extruder) {
+            return extruder.extruder_id() > 0;
+        });
+    this->multiple_extruders = has_multiple_logical_filaments || uses_nonzero_mapped_nozzle;
 }
 
 std::string GCodeWriter::preamble()

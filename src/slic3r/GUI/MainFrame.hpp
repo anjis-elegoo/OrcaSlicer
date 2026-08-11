@@ -26,6 +26,7 @@
 #include "Widgets/SideButton.hpp"
 #include "Widgets/SideMenuPopup.hpp"
 #include "FilamentGroupPopup.hpp"
+#include "GenericFilamentGroupPopup.hpp"
 
 
 #include <boost/property_tree/ptree_fwd.hpp>
@@ -409,7 +410,8 @@ public:
 
     SidePopup*  m_slice_option_pop_up{ nullptr };
 
-    FilamentGroupPopup* m_filament_group_popup{ nullptr };
+    FilamentGroupPopup*        m_filament_group_popup{ nullptr };
+    GenericFilamentGroupPopup* m_generic_filament_group_popup{ nullptr };
     mutable bool          m_slice_enable{ true };
     mutable bool          m_print_enable{ true };
     bool get_enable_slice_status();

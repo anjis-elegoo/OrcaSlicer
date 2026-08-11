@@ -192,6 +192,18 @@ std::vector<unsigned int> get_extruders_order(const std::vector<std::vector<floa
                                               bool use_forcast = false,
                                               float *cost = nullptr);
 
+// Returns a zero-based physical-nozzle assignment. This is the N-nozzle
+// counterpart of BBL's flush-saving filament grouping.
+std::vector<int> auto_group_filaments_for_minimum_flush(
+    size_t filament_count,
+    size_t nozzle_count,
+    const std::vector<std::vector<unsigned int>> &layer_filaments,
+    const std::vector<FlushMatrix> &flush_matrices,
+    const std::vector<std::set<int>> &unprintable_filaments,
+    const std::vector<int> &preferred_map,
+    int default_nozzle = 0,
+    const std::vector<bool> &preserve_layer_sequence = {});
+
 int reorder_filaments_for_minimum_flush_volume(const std::vector<unsigned int> &filament_lists,
                                                const std::vector<int> &filament_maps,
                                                const std::vector<std::vector<unsigned int>> &layer_filaments,
@@ -199,6 +211,16 @@ int reorder_filaments_for_minimum_flush_volume(const std::vector<unsigned int> &
                                                std::optional<std::function<bool(int, std::vector<int> &)>> get_custom_seq,
                                                std::vector<std::vector<unsigned int>> *filament_sequences,
                                                const std::unordered_map<int, int>& nozzle_status = {});
+
+// Generic N-nozzle counterpart. Kept separate so extending generic grouping
+// cannot alter Bambu's established two-nozzle ordering behavior.
+int reorder_generic_filaments_for_minimum_flush_volume(const std::vector<unsigned int> &filament_lists,
+                                                       const std::vector<int> &filament_maps,
+                                                       const std::vector<std::vector<unsigned int>> &layer_filaments,
+                                                       const std::vector<FlushMatrix> &flush_matrix,
+                                                       std::optional<std::function<bool(int, std::vector<int> &)>> get_custom_seq,
+                                                       std::vector<std::vector<unsigned int>> *filament_sequences,
+                                                       const std::unordered_map<int, int> &nozzle_status = {});
 
 // Order filaments within a per-nozzle grouping result (multi-nozzle extruders). Threads a
 // NozzleStatusRecorder describing the initial physical nozzle occupancy so the reorder can reward

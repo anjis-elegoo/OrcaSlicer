@@ -1583,6 +1583,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionString,              machine_start_gcode))
     ((ConfigOptionStrings,             filament_start_gcode))
     ((ConfigOptionBool,                single_extruder_multi_material))
+    ((ConfigOptionBool,                supports_multiple_filaments_per_nozzle))
     ((ConfigOptionBool,                manual_filament_change))
     ((ConfigOptionBool,                single_extruder_multi_material_priming))
     ((ConfigOptionEnum<ToolChangeOrderingType>, toolchange_ordering))
@@ -2385,9 +2386,26 @@ static std::vector<T> get_flush_volumes_matrix(const std::vector<T> &fv_matrix, 
 template<class T>
 static void set_flush_volumes_matrix(std::vector<T> &out_matrix, const std::vector<T> &fv_matrix, size_t extruder_id = -1, size_t nozzle_nums = 1)
 {
-    bool is_multi_extruder = false;
     if (extruder_id != -1 && nozzle_nums != 1) {
-        std::copy(fv_matrix.begin(), fv_matrix.end(), out_matrix.begin() + size_t(out_matrix.size() / nozzle_nums * extruder_id + EPSILON));
+        if (extruder_id >= nozzle_nums || fv_matrix.empty())
+            return;
+
+        const size_t matrix_size_per_nozzle = fv_matrix.size();
+        const size_t required_size = matrix_size_per_nozzle * nozzle_nums;
+        if (out_matrix.size() != required_size) {
+            std::vector<T> normalized_matrix(required_size, T{});
+            if (out_matrix.size() == matrix_size_per_nozzle) {
+                // Compatibility with a single-nozzle project being switched to a multi-nozzle
+                // printer before the preset migration has expanded the matrix.
+                for (size_t nozzle_id = 0; nozzle_id < nozzle_nums; ++nozzle_id)
+                    std::copy(out_matrix.begin(), out_matrix.end(), normalized_matrix.begin() + nozzle_id * matrix_size_per_nozzle);
+            } else {
+                std::copy_n(out_matrix.begin(), std::min(out_matrix.size(), required_size), normalized_matrix.begin());
+            }
+            out_matrix = std::move(normalized_matrix);
+        }
+
+        std::copy(fv_matrix.begin(), fv_matrix.end(), out_matrix.begin() + matrix_size_per_nozzle * extruder_id);
     }
     else {
         out_matrix = std::vector<T>(fv_matrix.begin(), fv_matrix.end());
@@ -2395,6 +2413,38 @@ static void set_flush_volumes_matrix(std::vector<T> &out_matrix, const std::vect
 }
 
 size_t get_extruder_index(const GCodeConfig& config, unsigned int filament_id);
+
+// Runtime gate for assigning multiple logical filaments to each physical nozzle.
+// A single-nozzle multi-material printer must continue through the existing SEMM path.
+inline bool is_multiple_filaments_per_nozzle_enabled(const ConfigBase& config)
+{
+    const auto* supports_multiple_filaments =
+        config.option<ConfigOptionBool>("supports_multiple_filaments_per_nozzle");
+    const auto* nozzle_diameters   = config.option<ConfigOptionFloats>("nozzle_diameter");
+    const auto* single_extruder_mm = config.option<ConfigOptionBool>("single_extruder_multi_material");
+    return supports_multiple_filaments != nullptr && supports_multiple_filaments->value &&
+           nozzle_diameters != nullptr && nozzle_diameters->values.size() > 1 &&
+           (single_extruder_mm == nullptr || !single_extruder_mm->value);
+}
+
+// Automatic generic grouping assumes that every physical nozzle can use the
+// same slicing geometry. With mixed diameters the user must explicitly choose
+// the nozzle for each filament instead.
+inline bool has_different_nozzle_diameters(const ConfigBase& config)
+{
+    const auto* nozzle_diameters = config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (nozzle_diameters == nullptr || nozzle_diameters->values.size() <= 1)
+        return false;
+
+    const double first = nozzle_diameters->values.front();
+    return std::any_of(nozzle_diameters->values.begin() + 1, nozzle_diameters->values.end(),
+                       [first](double diameter) { return !is_approx(diameter, first); });
+}
+
+// True only when every configured physical nozzle uses the same effective
+// slicing-relevant extruder settings. A single-nozzle configuration does not
+// provide enough information to guarantee compatibility with another nozzle.
+bool are_nozzle_slicing_parameters_compatible(const ConfigBase &config);
 
 } // namespace Slic3r
 

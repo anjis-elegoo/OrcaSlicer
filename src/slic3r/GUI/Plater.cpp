@@ -182,6 +182,7 @@
 #include "../Utils/OrcaCloudServiceAgent.hpp"
 #include "StepMeshDialog.hpp"
 #include "FilamentMapDialog.hpp"
+#include "GenericFilamentMapDialog.hpp"
 #include "CloneDialog.hpp"
 #include "PurgeModeDialog.hpp"
 
@@ -4604,7 +4605,7 @@ bool Sidebar::should_show_SEMM_buttons()
     bool is_bbl_vendor = preset_bundle.is_bbl_vendor();
     auto cfg = preset_bundle.printers.get_edited_preset().config;
 
-    return cfg.opt_bool("single_extruder_multi_material") || is_bbl_vendor;
+    return cfg.opt_bool("single_extruder_multi_material") || is_bbl_vendor || preset_bundle.is_multiple_filaments_per_nozzle_supported();
 }
 
 void Sidebar::show_SEMM_buttons()
@@ -5825,6 +5826,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     , config(Slic3r::DynamicPrintConfig::new_from_defaults_keys({
         "printable_area", "bed_exclude_area", "wrapping_exclude_area", "extruder_printable_area", "bed_custom_texture", "bed_custom_model", "print_sequence",
         "extruder_clearance_radius",
+        "supports_multiple_filaments_per_nozzle",
         "extruder_clearance_height_to_lid", "extruder_clearance_height_to_rod",
 		"nozzle_height", "skirt_type", "skirt_loops", "skirt_speed","min_skirt_length", "skirt_distance", "skirt_start_angle",
         "brim_width", "brim_object_gap", "brim_flow_ratio", "brim_use_efc_outline", "combine_brims", "brim_type", "nozzle_diameter", "single_extruder_multi_material", "preferred_orientation",
@@ -17781,6 +17783,7 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
             boost::starts_with(opt_key, "wipe_tower") ||
             opt_key == "filament_minimal_purge_on_wipe_tower" ||
             opt_key == "single_extruder_multi_material" ||
+            opt_key == "supports_multiple_filaments_per_nozzle" ||
             // BBS
             opt_key == "prime_volume") {
             update_scheduled = true;
@@ -19162,10 +19165,45 @@ void Plater::open_filament_map_setting_dialog(wxCommandEvent &evt)
     auto plate_filament_maps = curr_plate->get_real_filament_maps(project_config);
     auto plate_filament_map_mode = curr_plate->get_filament_map_mode();
     auto plate_filament_volume_maps = curr_plate->get_real_filament_volume_maps(project_config);
+    const bool generic_grouping = !wxGetApp().preset_bundle->is_bbl_vendor() && is_multiple_filaments_per_nozzle_enabled(*config());
     if (plate_filament_maps.size() != filament_colors.size())  // refine it later, save filament map to app config
         plate_filament_maps.resize(filament_colors.size(), 1);
     if (plate_filament_volume_maps.size() != filament_colors.size())
         plate_filament_volume_maps.resize(filament_colors.size(), 0);
+
+    if (generic_grouping) {
+        const size_t nozzle_count = config()->option<ConfigOptionFloats>("nozzle_diameter")->values.size();
+        GenericFilamentMapDialog filament_dlg(this,
+                                              filament_colors,
+                                              filament_types,
+                                              plate_filament_maps,
+                                              curr_plate->get_extruders(true),
+                                              plate_filament_map_mode,
+                                              nozzle_count,
+                                              !has_different_nozzle_diameters(*config()));
+        if (filament_dlg.ShowModal() != wxID_OK)
+            return;
+
+        std::vector<int> new_filament_maps = filament_dlg.get_filament_maps();
+        std::vector<int> old_filament_maps = curr_plate->get_real_filament_maps(project_config);
+        FilamentMapMode old_map_mode = curr_plate->get_filament_map_mode();
+        FilamentMapMode new_map_mode = filament_dlg.get_mode();
+        if (new_map_mode != old_map_mode)
+            curr_plate->set_filament_map_mode(new_map_mode);
+        if (new_map_mode == fmmManual)
+            curr_plate->set_filament_maps(new_filament_maps);
+        bool need_invalidate = old_map_mode != new_map_mode || old_filament_maps != new_filament_maps;
+        if (need_invalidate) {
+            if (need_slice)
+                wxPostEvent(this, SimpleEvent(EVT_GLTOOLBAR_SLICE_PLATE));
+            else {
+                curr_plate->update_slice_result_valid_state(false);
+                set_plater_dirty(true);
+                update();
+            }
+        }
+        return;
+    } 
 
     FilamentMapDialog filament_dlg(this,
         filament_colors,

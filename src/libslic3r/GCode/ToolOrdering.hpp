@@ -299,6 +299,11 @@ private:
     void                mark_skirt_layers(const PrintConfig &config, coordf_t max_layer_height);
     void 				collect_extruder_statistics(bool prime_multi_material);
     void                reorder_extruders_for_minimum_flush_volume(bool reorder_first_layer);
+    void                reorder_generic_extruders_for_minimum_flush_volume(bool reorder_first_layer);
+    static MultiNozzleUtils::LayeredNozzleGroupResult get_recommended_generic_filament_maps(const std::vector<std::vector<unsigned int>> &layer_filaments, const Print *print, FilamentMapMode mode, const std::vector<std::set<int>> &geometric_unprintables);
+    static FilamentChangeStats calc_filament_change_info_by_toolorder(const PrintConfig *config, const MultiNozzleUtils::LayeredNozzleGroupResult &group_result, const std::vector<std::vector<std::vector<float>>> &flush_matrix, const std::vector<std::vector<unsigned int>> &layer_sequences);
+    static std::vector<MultiNozzleUtils::NozzleInfo> build_default_nozzle_list(const PrintConfig &print_config, size_t extruder_nums);
+    static MultiNozzleUtils::LayeredNozzleGroupResult build_group_result_from_map(const PrintConfig &print_config, const std::vector<int> &filament_map_0based, const std::vector<unsigned int> &used_filaments);
 
     // BBS
     std::vector<unsigned int> generate_first_layer_tool_order(const Print& print);

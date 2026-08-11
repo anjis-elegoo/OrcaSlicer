@@ -330,6 +330,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "filament_max_volumetric_speed"
             || opt_key == "gcode_flavor"
             || opt_key == "single_extruder_multi_material"
+            || opt_key == "supports_multiple_filaments_per_nozzle"
             || opt_key == "nozzle_temperature"
             // BBS
             || opt_key == "supertack_plate_temp"
@@ -1326,6 +1327,27 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
+
+    if (!is_BBL_printer() && is_multiple_filaments_per_nozzle_enabled(m_config) &&
+        has_different_nozzle_diameters(m_config) &&
+        m_config.filament_map_mode != fmmManual && m_config.filament_map_mode != fmmNozzleManual) {
+        StringObjectException ret;
+        ret.string = L("Automatic filament grouping is unavailable when nozzle diameters differ. Please use manual grouping.");
+        ret.opt_key = "filament_map_mode";
+        return ret;
+    }
+
+    if ((is_BBL_printer() || is_multiple_filaments_per_nozzle_enabled(m_config)) && m_config.filament_map_mode == fmmManual) {
+        const std::vector<int> &filament_map = m_config.filament_map.values;
+        for (unsigned int filament_id : extruders) {
+            if (filament_id >= filament_map.size() || filament_map[filament_id] < 1 || filament_map[filament_id] > int(nozzles)) {
+                StringObjectException ret;
+                ret.string = L("Filament grouping contains a missing or invalid nozzle assignment.");
+                ret.opt_key = "filament_map";
+                return ret;
+            }
+        }
+    }
 
     if (nozzles < 2 && extruders.size() > 1) {
         auto ret = check_multi_filament_valid(*this);
@@ -2611,7 +2633,9 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             auto filament_unprintable_volumes = this->get_filament_unprintable_flow(used_filaments);
             // Selector (per-layer regroup) prints skip the static grouping: their print-wide result
             // is stitched from the per-object plans after the ordering loop below.
-            const bool dynamic_reorder = this->is_dynamic_group_reorder();
+            const bool is_bambu_grouping = this->is_BBL_printer();
+            const bool is_generic_grouping = !is_bambu_grouping && is_multiple_filaments_per_nozzle_enabled(m_config);
+            const bool dynamic_reorder = is_bambu_grouping && this->is_dynamic_group_reorder();
             if (!dynamic_reorder) {
                 std::vector<int>filament_maps = this->get_filament_maps();
                 auto map_mode = get_filament_map_mode();
@@ -2640,12 +2664,17 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                         std::vector<int> base_filament_map = m_config.filament_map.values;
                         if (base_filament_map.size() != derived_maps.size())
                             base_filament_map.assign(derived_maps.size(), 1);
-                        std::vector<int> base_volume_map = m_config.filament_volume_map.values;
-                        if (base_volume_map.size() != derived_maps.size())
-                            base_volume_map.assign(derived_maps.size(), (int)nvtStandard);
-                        update_filament_maps_to_config(FilamentGroupUtils::update_used_filament_values(base_filament_map, derived_maps, used_filaments),
-                                                       FilamentGroupUtils::update_used_filament_values(base_volume_map, grouping_result.get_volume_map(), used_filaments),
-                                                       grouping_result.get_nozzle_map());
+                        if (is_bambu_grouping) {
+                            std::vector<int> base_volume_map = m_config.filament_volume_map.values;
+                            if (base_volume_map.size() != derived_maps.size())
+                                base_volume_map.assign(derived_maps.size(), (int)nvtStandard);
+                            update_filament_maps_to_config(FilamentGroupUtils::update_used_filament_values(base_filament_map, derived_maps, used_filaments),
+                                                           FilamentGroupUtils::update_used_filament_values(base_volume_map, grouping_result.get_volume_map(), used_filaments),
+                                                           grouping_result.get_nozzle_map());
+                        } else if (is_generic_grouping) {
+                            update_filament_maps_to_config(
+                                FilamentGroupUtils::update_used_filament_values(base_filament_map, derived_maps, used_filaments));
+                        }
                     }
                 }
                 // check map valid both in auto and mannual mode

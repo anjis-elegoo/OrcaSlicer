@@ -1775,8 +1775,11 @@ void UnsavedChangesDialog::update_tree(Preset::Type type, PresetCollection* pres
 
         auto variant_key      = Preset::get_iot_type_string(type) + "_extruder_variant";
         auto id_key           = Preset::get_iot_type_string(type) + "_extruder_id";
-        auto extruder_variant = dynamic_cast<ConfigOptionStrings const *>(old_config.option(variant_key));
-        auto extruder_id      = dynamic_cast<ConfigOptionInts const *>(old_config.option(id_key));
+        auto old_extruder_variant = dynamic_cast<ConfigOptionStrings const *>(old_config.option(variant_key));
+        auto old_extruder_id      = dynamic_cast<ConfigOptionInts const *>(old_config.option(id_key));
+        auto new_extruder_variant = dynamic_cast<ConfigOptionStrings const *>(new_config.option(variant_key));
+        auto new_extruder_id      = dynamic_cast<ConfigOptionInts const *>(new_config.option(id_key));
+        const bool is_bambu_printer = wxGetApp().preset_bundle->is_bbl_vendor();
 
         for (const std::string& opt_key : dirty_options) {
             int variant_index = -2;
@@ -1791,13 +1794,34 @@ void UnsavedChangesDialog::update_tree(Preset::Type type, PresetCollection* pres
             if (variant_index >= 0) {
                 if (printer_options_with_variant_2.count(opt_key.substr(0, opt_key.find_last_of('#'))) > 0)
                     variant_index /= 2;
-                if (boost::nowide::narrow(category).find("Extruder ") == 0)
-                    category = category.substr(0, 8);
-                if (extruder_id)
-                    category = category + (wxString(" {") + (extruder_id->values[variant_index] == 1 ? _L("Left: ") : _L("Right: "))
-                            + L(extruder_variant->values[variant_index]) + "}");
-                else
-                    category = category + (wxString(" {") + L(extruder_variant->values[variant_index]) + "}");
+
+                const size_t variant_idx = static_cast<size_t>(variant_index);
+                const ConfigOptionStrings *extruder_variant = nullptr;
+                const ConfigOptionInts    *extruder_id      = nullptr;
+                if (old_extruder_variant && variant_idx < old_extruder_variant->values.size()) {
+                    extruder_variant = old_extruder_variant;
+                    extruder_id      = old_extruder_id;
+                } else if (new_extruder_variant && variant_idx < new_extruder_variant->values.size()) {
+                    // A newly added extruder has no corresponding entry in the selected preset;
+                    // use the edited preset metadata when it is available.
+                    extruder_variant = new_extruder_variant;
+                    extruder_id      = new_extruder_id;
+                }
+
+                if (extruder_variant) {
+                    const bool has_extruder_id = extruder_id && variant_idx < extruder_id->values.size();
+                    const int  id              = has_extruder_id ? extruder_id->values[variant_idx] : 0;
+                    if (is_bambu_printer && (id == 1 || id == 2)) {
+                        // Left/right is a Bambu dual-extruder UI convention.
+                        if (boost::nowide::narrow(category).find("Extruder ") == 0)
+                            category = category.substr(0, 8);
+                        category += wxString(" {") + (id == 1 ? _L("Left: ") : _L("Right: ")) +
+                                    from_u8(extruder_variant->values[variant_idx]) + "}";
+                    } else {
+                        // Generic grouped printers retain the searcher's "Extruder N" category.
+                        category += wxString(" {") + from_u8(extruder_variant->values[variant_idx]) + "}";
+                    }
+                }
             }
 
             /*m_tree->Append(opt_key, type, option.category_local, option.group_local, option.label_local,

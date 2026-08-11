@@ -195,6 +195,7 @@ private:
     std::vector<ExtruderFilament> m_left_extruder_filament;
     std::vector<ExtruderFilament> m_right_extruder_filament;
     size_t m_nozzle_nums;
+    std::vector<std::vector<ExtruderFilament>> m_generic_nozzle_filaments;
 
     // bounding box of toolpaths
     BoundingBoxf3 m_paths_bounding_box;
@@ -369,6 +370,7 @@ private:
     //BBS: GUI refactor: add canvas size
     void render_legend(float &legend_height, int canvas_width, int canvas_height, int right_margin);
     void render_legend_color_arr_recommen(float window_padding);
+    void render_generic_filament_grouping_legend(float window_padding, float legend_x, float legend_y, float legend_width, int canvas_height);
     void render_slider(int canvas_width, int canvas_height);
 };
 

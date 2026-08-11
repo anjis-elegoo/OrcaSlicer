@@ -1,4 +1,5 @@
 #include "FilamentMapDialog.hpp"
+#include "GenericFilamentMapDialog.hpp"
 #include "PartPlate.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/DialogButtons.hpp"
@@ -121,6 +122,9 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
     // For toolchangers (≥3 tools) and all non-BBL printers the dialog is irrelevant and
     // confusing; skip it entirely so slicing proceeds without interruption. (#12390)
     PresetBundle* preset = wxGetApp().preset_bundle;
+    const bool generic_grouping = !preset->is_bbl_vendor() && is_multiple_filaments_per_nozzle_enabled(full_config);
+    if (generic_grouping)
+        return try_pop_up_generic_before_slice(is_slice_all, plater_ref, partplate_ref, force_pop_up);
     if (!preset || !preset->is_bbl_vendor() || nozzle_diameters->size() != 2)
         return true;
 

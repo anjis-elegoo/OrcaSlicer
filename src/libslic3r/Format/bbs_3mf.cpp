@@ -377,6 +377,7 @@ static constexpr const char* LABEL_OBJECT_ENABLED_ATTR = "label_object_enabled";
 static constexpr const char* ENABLE_FILAMENT_DYNAMIC_MAP_ATTR = "enable_filament_dynamic_map";
 static constexpr const char* HAS_FILAMENT_SWITCHER_ATTR = "has_filament_switcher";
 static constexpr const char* SKIPPED_ATTR = "skipped";
+static constexpr const char* NOZZLE_SLICING_PARAMETERS_COMPATIBLE_KEY = "nozzle_slicing_parameters_compatible";
 
 static constexpr const char* OBJECT_TYPE = "object";
 static constexpr const char* VOLUME_TYPE = "volume";
@@ -682,6 +683,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 {
     if (!result) return;
 
+    nozzle_slicing_parameters_compatible = result->nozzle_slicing_parameters_compatible;
     PrintEstimatedStatistics &ps                            = result->print_statistics;
     std::vector<float>        m_filament_diameters          = result->filament_diameters;
     std::vector<float>        m_filament_densities          = result->filament_densities;
@@ -1656,6 +1658,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate->toolpath_outside = it->second->toolpath_outside;
             plate->is_support_used = it->second->is_support_used;
             plate->is_label_object_enabled = it->second->is_label_object_enabled;
+            plate->nozzle_slicing_parameters_compatible = it->second->nozzle_slicing_parameters_compatible;
             plate->skipped_objects = it->second->skipped_objects;
             plate->slice_filaments_info = it->second->slice_filaments_info;
             plate->nozzles_info = it->second->nozzles_info;
@@ -2330,6 +2333,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate_data_list[it->first-1]->toolpath_outside = it->second->toolpath_outside;
             plate_data_list[it->first-1]->is_support_used = it->second->is_support_used;
             plate_data_list[it->first-1]->is_label_object_enabled = it->second->is_label_object_enabled;
+            plate_data_list[it->first-1]->nozzle_slicing_parameters_compatible = it->second->nozzle_slicing_parameters_compatible;
             plate_data_list[it->first-1]->slice_filaments_info = it->second->slice_filaments_info;
             plate_data_list[it->first-1]->nozzles_info  = it->second->nozzles_info;
             plate_data_list[it->first-1]->skipped_objects = it->second->skipped_objects;
@@ -4641,6 +4645,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             {
                 if (m_curr_plater)
                     m_curr_plater->nozzle_diameters = value;
+            }
+            else if (key == NOZZLE_SLICING_PARAMETERS_COMPATIBLE_KEY)
+            {
+                if (m_curr_plater)
+                    std::istringstream(value) >> std::boolalpha >> m_curr_plater->nozzle_slicing_parameters_compatible;
             }
         }
 
@@ -8339,6 +8348,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << PRINTER_MODEL_ID_ATTR       << "\" " << VALUE_ATTR << "=\"" << plate_data->printer_model_id << "\"/>\n";
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << NOZZLE_DIAMETERS_ATTR       << "\" " << VALUE_ATTR << "=\"" << nozzle_diameters_str << "\"/>\n";
+                stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << NOZZLE_SLICING_PARAMETERS_COMPATIBLE_KEY << "\" " << VALUE_ATTR << "=\"" << std::boolalpha << plate_data->nozzle_slicing_parameters_compatible << "\"/>\n";
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << TIMELAPSE_TYPE_ATTR << "\" " << VALUE_ATTR << "=\"" << timelapse_type << "\"/>\n";
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << SLICE_PREDICTION_ATTR << "\" " << VALUE_ATTR << "=\"" << plate_data->get_gcode_prediction_str() << "\"/>\n";
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << SLICE_WEIGHT_ATTR      << "\" " << VALUE_ATTR << "=\"" <<  plate_data->get_gcode_weight_str() << "\"/>\n";

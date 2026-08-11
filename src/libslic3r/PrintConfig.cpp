@@ -6529,6 +6529,13 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
+    def = this->add("supports_multiple_filaments_per_nozzle", coBool);
+    def->label = L("Multiple filaments per nozzle");
+    def->tooltip = L("Allow each nozzle to use multiple filaments, so the number of filaments may exceed the number of nozzles. "
+                     "Default tool-change commands use the mapped physical nozzle.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("manual_filament_change", coBool);
     def->label = L("Manual Filament Change");
     def->tooltip = L("Enable this option to omit the custom Change filament G-code only at the beginning of the print. "
@@ -9197,6 +9204,48 @@ void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
 }
 
 const PrintConfigDef print_config_def;
+
+bool are_nozzle_slicing_parameters_compatible(const ConfigBase &config)
+{
+    const auto *nozzle_diameters = config.option<ConfigOptionFloats>("nozzle_diameter");
+    if (nozzle_diameters == nullptr || nozzle_diameters->values.size() <= 1)
+        return false;
+
+    const size_t nozzle_count = nozzle_diameters->values.size();
+    auto option_values_are_compatible = [&config, nozzle_count](const std::string &key) {
+        // These values describe presentation/default selection and do not affect
+        // the generated toolpath or per-nozzle G-code.
+        if (key == "default_filament_profile" || key == "extruder_colour")
+            return true;
+
+        const auto *option = dynamic_cast<const ConfigOptionVectorBase *>(config.option(key));
+        if (option == nullptr || option->empty())
+            return true;
+
+        const std::vector<std::string> values = option->vserialize();
+        if (values.empty())
+            return true;
+
+        for (size_t nozzle_id = 1; nozzle_id < nozzle_count; ++nozzle_id) {
+            const std::string &value = nozzle_id < values.size() ? values[nozzle_id] : values.front();
+            if (value != values.front())
+                return false;
+        }
+        return true;
+    };
+
+    for (const std::string &key : print_config_def.extruder_option_keys())
+        if (!option_values_are_compatible(key))
+            return false;
+
+    // These per-nozzle geometry/capability settings are maintained outside
+    // extruder_option_keys(), but also affect whether the generated path is reusable.
+    for (const char *key : {"extruder_printable_area", "extruder_max_nozzle_count"})
+        if (!option_values_are_compatible(key))
+            return false;
+
+    return true;
+}
 
 //todo
 std::set<std::string> print_options_with_variant = {

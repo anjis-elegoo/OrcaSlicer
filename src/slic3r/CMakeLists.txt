@@ -266,8 +266,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/CapsuleButton.hpp
     GUI/FilamentMapPanel.cpp
     GUI/FilamentMapPanel.hpp
+    GUI/GenericFilamentMapPanel.cpp
+    GUI/GenericFilamentMapPanel.hpp
     GUI/FilamentMapDialog.cpp
     GUI/FilamentMapDialog.hpp
+    GUI/GenericFilamentMapDialog.cpp
+    GUI/GenericFilamentMapDialog.hpp
     GUI/IconManager.cpp
     GUI/IconManager.hpp
     GUI/ImageGrid.cpp
@@ -399,6 +403,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/PartPlate.hpp
     GUI/FilamentGroupPopup.hpp
     GUI/FilamentGroupPopup.cpp
+    GUI/GenericFilamentGroupPopup.hpp
+    GUI/GenericFilamentGroupPopup.cpp
     GUI/PhysicalPrinterDialog.cpp
     GUI/PhysicalPrinterDialog.hpp
     GUI/Plater.cpp

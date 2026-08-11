@@ -3064,6 +3064,11 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         file.writeln(out.str());
     }
 
+    {
+        const bool nozzle_slicing_parameters_compatible = are_nozzle_slicing_parameters_compatible(print.config());
+        file.write_format("; %s: %s\n", "nozzle slicing parameters compatible", nozzle_slicing_parameters_compatible ? "1" : "0");
+    }
+
     file.write_format("; HEADER_BLOCK_END\n\n");
     }
     

@@ -290,6 +290,15 @@ wxString WipingDialog::BuildTableObjStr()
     obj["max_flush_multiplier"] = g_max_flush_multiplier;
     obj["is_dark_mode"] = wxGetApp().dark_mode();
     obj["default_matrixs"]      = json::array();
+    obj["extruder_labels"]      = json::array();
+
+    if (wxGetApp().preset_bundle->is_bbl_vendor() && nozzle_num == 2) {
+        obj["extruder_labels"].push_back(into_u8(_L("Left extruder")));
+        obj["extruder_labels"].push_back(into_u8(_L("Right extruder")));
+    } else {
+        for (int idx = 0; idx < nozzle_num; ++idx)
+            obj["extruder_labels"].push_back(into_u8(wxString::Format(_L("Nozzle %d"), idx + 1)));
+    }
 
     for (const auto& vec : flush_matrixs) {
         obj["flush_volume_matrixs"].push_back(vec);
@@ -301,7 +310,7 @@ wxString WipingDialog::BuildTableObjStr()
     for (int idx = 0; idx < nozzle_num; ++idx) {
         const std::vector<int> &min_flush_volumes = get_min_flush_volumes(full_config, idx);
         int min_flush_from_nozzle_volume = *min_element(min_flush_volumes.begin(), min_flush_volumes.end());
-        GenericFlushPredictor pd(nozzle_flush_dataset[idx]);
+        GenericFlushPredictor pd(nozzle_flush_dataset.empty() ? 0 : nozzle_flush_dataset[std::min<size_t>(idx, nozzle_flush_dataset.size() - 1)]);
         int min_flush_from_flush_data = pd.get_min_flush_volume();
         obj["min_flush_volumes"].push_back(std::min(min_flush_from_flush_data,min_flush_from_nozzle_volume));
         obj["max_flush_volumes"].push_back(m_max_flush_volume);
@@ -318,8 +327,6 @@ wxString WipingDialog::BuildTextObjStr(bool multi_language)
     wxString volume_range_panel;
     wxString multiplier_range_panel;
     wxString calc_btn_panel;
-    wxString extruder_label_0;
-    wxString extruder_label_1;
     wxString multiplier_label;
     wxString ok_btn_label;
     wxString cancel_btn_label;
@@ -330,8 +337,6 @@ wxString WipingDialog::BuildTextObjStr(bool multi_language)
         volume_range_panel = wxString::Format(_L("Suggestion: Flushing Volume in range [%d, %d]"), 0, 700);
         multiplier_range_panel = wxString::Format(_L("The multiplier should be in range [%.2f, %.2f]."), 0, 3);
         calc_btn_panel = _L("Re-calculate");
-        extruder_label_0 = _L("Left extruder");
-        extruder_label_1 = _L("Right extruder");
         multiplier_label = _L("Multiplier");
         ok_btn_label = _L("OK");
         cancel_btn_label = _L("Cancel");
@@ -341,8 +346,6 @@ wxString WipingDialog::BuildTextObjStr(bool multi_language)
         volume_range_panel = wxString::Format("Suggestion: Flushing Volume in range [%d, %d]", 0, 700);
         multiplier_range_panel = wxString::Format("The multiplier should be in range [%.2f, %.2f].", 0, 3);
         calc_btn_panel = "Re-calculate";
-        extruder_label_0 = "Left extruder";
-        extruder_label_1 = "Right extruder";
         multiplier_label = "Multiplier";
         ok_btn_label = "OK";
         cancel_btn_label = "Cancel";
@@ -353,8 +356,6 @@ wxString WipingDialog::BuildTextObjStr(bool multi_language)
     text_obj += wxString::Format("\"volume_range_panel\":\"%s\",", volume_range_panel);
     text_obj += wxString::Format("\"multiplier_range_panel\":\"%s\",", multiplier_range_panel);
     text_obj += wxString::Format("\"calc_btn_panel\":\"%s\",", calc_btn_panel);
-    text_obj += wxString::Format("\"extruder_label_0\":\"%s\",", extruder_label_0);
-    text_obj += wxString::Format("\"extruder_label_1\":\"%s\",", extruder_label_1);
     text_obj += wxString::Format("\"multiplier_label\":\"%s\",", multiplier_label);
     text_obj += wxString::Format("\"ok_btn_label\":\"%s\",", ok_btn_label);
     text_obj += wxString::Format("\"cancel_btn_label\":\"%s\",", cancel_btn_label);
@@ -530,7 +531,8 @@ WipingDialog::VolumeMatrix WipingDialog::CalcFlushingVolumes(int extruder_id)
     for (auto color_str : filament_color_strs)
         filament_colors.emplace_back(color_str);
 
-    int flush_dataset_value = full_config.option<ConfigOptionIntsNullable>("nozzle_flush_dataset")->values[extruder_id];
+    const auto &flush_datasets = full_config.option<ConfigOptionIntsNullable>("nozzle_flush_dataset")->values;
+    int flush_dataset_value = flush_datasets.empty() ? 0 : flush_datasets[std::min<size_t>(extruder_id, flush_datasets.size() - 1)];
     // Support for multi-color filament
     for (int i = 0; i < filament_colors.size(); ++i) {
         std::vector<wxColour> single_filament;

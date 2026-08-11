@@ -1877,7 +1877,25 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     }
 
 
-    if (opt_key == "single_extruder_multi_material"  ){
+    if (opt_key == "supports_multiple_filaments_per_nozzle" && !boost::any_cast<bool>(value)) {
+        const auto *nozzle_diameters = m_config->option<ConfigOptionFloats>("nozzle_diameter");
+        const size_t nozzle_count = nozzle_diameters ? nozzle_diameters->values.size() : 0;
+        auto &project_colors =
+            wxGetApp().preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour")->values;
+        // Returning to the fixed-filament multi-nozzle mode makes every logical filament
+        // correspond to one physical nozzle. Remove trailing logical filaments immediately;
+        // Sidebar::delete_filament also updates object assignments, plate sequences and matrices.
+        while (nozzle_count > 0 && project_colors.size() > nozzle_count) {
+            const size_t previous_count = project_colors.size();
+            wxGetApp().sidebar().delete_filament(previous_count - 1);
+            if (project_colors.size() >= previous_count)
+                break;
+        }
+    }
+
+    if (opt_key == "single_extruder_multi_material" ||
+        opt_key == "supports_multiple_filaments_per_nozzle" ||
+        opt_key == "extruders_count") {
         wxGetApp().sidebar().show_SEMM_buttons();
         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     }
@@ -2172,7 +2190,7 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
 
 
     //Orca: sync filament num if it's a multi tool printer
-    if (opt_key == "extruders_count" && !m_config->opt_bool("single_extruder_multi_material")){
+    if (opt_key == "extruders_count" && !m_config->opt_bool("single_extruder_multi_material") && !m_config->opt_bool("supports_multiple_filaments_per_nozzle")) {
         auto num_extruder = boost::any_cast<size_t>(value);
         int         old_filament_size = wxGetApp().preset_bundle->filament_presets.size();
         std::vector<std::string> new_colors;
@@ -5501,7 +5519,7 @@ if (is_marlin_flavor)
     if (from_initial_build) {
         // create a page, but pretend it's an extruder page, so we can add it to m_pages ourselves
         auto page     = add_options_page(L("Multimaterial"), "custom-gcode_multi_material", true); // ORCA: icon only visible on placeholders
-        auto optgroup = page->new_optgroup(L("Single extruder multi-material setup"), "param_multi_material");
+        auto optgroup = page->new_optgroup(L("Multi-material setup"), "param_multi_material");
         optgroup->append_single_option_line("single_extruder_multi_material", "printer_multimaterial_setup#single-extruder-multi-material");
         ConfigOptionDef def;
         def.type    = coInt, def.set_default_value(new ConfigOptionInt((int) m_extruders_count));
@@ -5585,6 +5603,7 @@ if (is_marlin_flavor)
                 }
             });
         };
+        optgroup->append_single_option_line("supports_multiple_filaments_per_nozzle");
         optgroup->append_single_option_line("manual_filament_change", "printer_multimaterial_setup#manual-filament-change");
         optgroup->append_single_option_line("bed_temperature_formula", "printer_basic_information_advanced#bed-temperature-type");
 
@@ -6128,6 +6147,7 @@ void TabPrinter::toggle_options()
         const size_t extruders_count = m_config->option<ConfigOptionFloats>("nozzle_diameter")->size();
         toggle_option("tool_change_on_wipe_tower", !bSEMM && supports_wipe_tower_2 && extruders_count > 1);
         toggle_option("wait_for_temp_on_wipe_tower", !bSEMM && supports_wipe_tower_2 && extruders_count > 1);
+        toggle_option("supports_multiple_filaments_per_nozzle", !is_BBL_printer && extruders_count > 1 && !bSEMM);
     }
     wxString extruder_number;
     long val = 1;

@@ -279,10 +279,7 @@
           <select
             id="extruders"
             onchange="handleExtruderSelect(document.getElementById('extruders').value)"
-          >
-            <option value="left" id="extruder_label_0">Left Nozzle</option>
-            <option value="right" id="extruder_label_1">Right Nozzle</option>
-          </select>
+          ></select>
         </div>
       </div>
 
@@ -433,8 +430,6 @@
         document.getElementById('multiplier_range_panel').innerText = data.multiplier_range_panel
         document.getElementById('auto_flush_tip').innerText = data.auto_flush_tip
         document.getElementById('calc_btn').innerText = data.calc_btn_panel
-        document.getElementById('extruder_label_0').innerText = data.extruder_label_0
-        document.getElementById('extruder_label_1').innerText = data.extruder_label_1
         document.getElementById('multiplier_label').innerText = data.multiplier_label
         document.getElementById('ok_btn').innerText = data.ok_btn_label
         document.getElementById('cancel_btn').innerText = data.cancel_btn_label
@@ -511,6 +506,13 @@
         updateFlushMultiplier(m_curr_extruder_id)
 
         const selectElement = document.getElementById('extruders');
+        selectElement.innerHTML = '';
+        for (let extruderId = 0; extruderId < m_number_of_extruders; extruderId++) {
+          const option = document.createElement('option');
+          option.value = extruderId.toString();
+          option.textContent = (data.extruder_labels || [])[extruderId] || `Nozzle ${extruderId + 1}`;
+          selectElement.appendChild(option);
+        }
         if (m_number_of_extruders > 1) {
           selectElement.style.display = 'inline-block';
         } else {
@@ -589,9 +591,11 @@
       }
 
       function handleExtruderSelect(extruder) {
-        m_curr_extruder_id = extruder == 'left' ? 0 : 1
+        const selectedExtruder = Number.parseInt(extruder, 10)
+        if (!Number.isInteger(selectedExtruder) || selectedExtruder < 0 || selectedExtruder >= m_number_of_extruders)
+          return
+        m_curr_extruder_id = selectedExtruder
         updateVolumeRange(m_min_flush_volumes[m_curr_extruder_id],m_max_flush_volumes[m_curr_extruder_id])
-        updateFlushMultiplier(m_min_flush_multiplier[m_curr_extruder_id],m_max_flush_multiplier[m_curr_extruder_id])
         updateFlushMultiplier(m_curr_extruder_id)
         updateTable(m_raw_matrix[m_curr_extruder_id], m_curr_extruder_id)
       }
