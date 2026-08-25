@@ -711,6 +711,7 @@ public:
     {
         float time{60.0f};
         int   steps{10};
+        bool  reassert_after_toolchange{false};
         float time_step() const { return time / float(steps); }
     };
 
@@ -731,6 +732,10 @@ private:
     {
         std::string                                                                        line;
         std::array<float, static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count)> times{0.0f, 0.0f};
+        bool                                                                               has_source_mapping{true};
+#ifndef NDEBUG
+        size_t                                                                             output_line_count{1};
+#endif // NDEBUG
     };
 
     enum ETimeMode {
@@ -756,7 +761,11 @@ private:
             m_max_lines_count = std::max(m_max_lines_count, m_lines_count);
         }
 
-        void remove_line() { --m_lines_count; }
+        void remove_lines(size_t count)
+        {
+            assert(count <= m_lines_count);
+            m_lines_count -= count;
+        }
         void remove_all_lines() { m_lines_count = 0; }
     };
 
@@ -842,7 +851,7 @@ public:
         if (line.empty())
             return;
 
-        m_lines.push_back({line, m_times});
+        m_lines.push_back({line, m_times, true});
 #ifndef NDEBUG
         m_statistics.add_line(line.length());
 #endif // NDEBUG
@@ -865,6 +874,23 @@ public:
             return boost::iequals(curr_cmd, "G28") || boost::iequals(curr_cmd, "G29") || boost::iequals(curr_cmd, "PRINT_START") ||
                    boost::iequals(curr_cmd, "START_PRINT");
         };
+        auto is_toolchange = [](const std::string& curr_cmd) {
+            int tool = -1;
+            return curr_cmd.size() > 1 && (curr_cmd.front() == 'T' || curr_cmd.front() == 't') &&
+                   parse_number(std::string_view(curr_cmd).substr(1), tool) && tool >= 0;
+        };
+        auto shift_line_map_after = [this](const std::deque<LineData>::const_iterator& pos) {
+            const size_t source_lines_after = static_cast<size_t>(
+                std::count_if(pos, m_lines.cend(), [](const LineData& line) { return line.has_source_mapping; }));
+            // update() has already appended the current input line, but append_line() has not yet
+            // assigned its output id. Skip that pending entry and shift only cached source lines
+            // which are actually located after the insertion point.
+            assert(!m_gcode_lines_map.empty() && m_gcode_lines_map.back().second == 0);
+            assert(source_lines_after + 1 <= m_gcode_lines_map.size());
+            const auto map_begin = m_gcode_lines_map.rbegin() + 1;
+            for (auto map_it = map_begin; map_it != map_begin + source_lines_after; ++map_it)
+                ++map_it->second;
+        };
         assert(!m_lines.empty());
         const float time_step           = backtrace.time_step();
         size_t      rev_it_dist         = 0;    // distance from the end of the cache of the starting point of the backtrace
@@ -874,19 +900,50 @@ public:
             const float time_threshold_i = m_times[Normal] - backtrace_time_i;
             auto        rev_it           = m_lines.rbegin() + rev_it_dist;
             auto        start_rev_it     = rev_it;
+            std::vector<size_t> crossed_toolchange_offsets;
 
             std::string curr_cmd = GCodeReader::GCodeLine::extract_cmd(rev_it->line);
             // backtrace into the cache to find the place where to insert the line
             while (rev_it != m_lines.rend() && rev_it->times[Normal] > time_threshold_i && curr_cmd != cmd && !is_start_pos(curr_cmd)) {
+                if (backtrace.reassert_after_toolchange && is_toolchange(curr_cmd))
+                    crossed_toolchange_offsets.emplace_back(static_cast<size_t>(std::distance(m_lines.rbegin(), rev_it)));
                 rev_it->line = line_replacer(rev_it->line);
                 ++rev_it;
                 if (rev_it != m_lines.rend())
                     curr_cmd = GCodeReader::GCodeLine::extract_cmd(rev_it->line);
             }
 
-            // we met the previous evenience of cmd, or the start position, stop inserting lines
-            if (rev_it != m_lines.rend() && (curr_cmd == cmd || is_start_pos(curr_cmd)))
+            // A firmware-managed logical-to-physical mapping may let an intervening T command
+            // cool or otherwise retarget the physical hotend selected by this preheat. Reassert
+            // the logical preheat immediately after every crossed tool change so the most recent
+            // command wins. Keep it in the same cache entry as Tn: this preserves iterator
+            // stability while still exporting it as the following G-code line.
+            auto insert_reassertions = [&](unsigned int step_id) {
+                for (size_t offset : crossed_toolchange_offsets) {
+                    auto toolchange_it = m_lines.rbegin() + offset;
+                    std::vector<float> reassert_time_diffs;
+                    reassert_time_diffs.push_back(m_times[Normal] - toolchange_it->times[Normal]);
+                    if (!m_machines[Stealth].g1_times_cache.empty())
+                        reassert_time_diffs.push_back(m_times[Stealth] - toolchange_it->times[Stealth]);
+                    const std::string reassert_line = line_inserter(step_id, reassert_time_diffs);
+                    shift_line_map_after(toolchange_it.base());
+                    toolchange_it->line += reassert_line;
+#ifndef NDEBUG
+                    ++toolchange_it->output_line_count;
+                    m_statistics.add_line(reassert_line.length());
+#endif
+                    m_size += reassert_line.length();
+                    ++m_added_lines_counter;
+                }
+            };
+
+            // Reaching the previous use of the target tool or the machine-start boundary prevents
+            // placement of the primary backtraced M104. It must not discard tool changes already
+            // crossed, though: those are still valid and safe positions to reassert the preheat.
+            if (rev_it != m_lines.rend() && (curr_cmd == cmd || is_start_pos(curr_cmd))) {
+                insert_reassertions(i + 1);
                 break;
+            }
 
             // insert the line for the current step
             if (rev_it != m_lines.rend() && rev_it != start_rev_it && rev_it->times[Normal] != last_time_insertion) {
@@ -897,15 +954,15 @@ public:
                     time_diffs.push_back(m_times[Stealth] - rev_it->times[Stealth]);
                 const std::string out_line = line_inserter(i + 1, time_diffs);
                 rev_it_dist                = std::distance(m_lines.rbegin(), rev_it) + 1;
-                m_lines.insert(rev_it.base(), {out_line, rev_it->times});
+
+                insert_reassertions(i + 1);
+
+                shift_line_map_after(rev_it.base());
+                m_lines.insert(rev_it.base(), {out_line, rev_it->times, false});
 #ifndef NDEBUG
                 m_statistics.add_line(out_line.length());
 #endif // NDEBUG
                 m_size += out_line.length();
-                // synchronize gcode lines map
-                for (auto map_it = m_gcode_lines_map.rbegin(); map_it != m_gcode_lines_map.rbegin() + rev_it_dist - 1; ++map_it) {
-                    ++map_it->second;
-                }
 
                 ++m_added_lines_counter;
             }
@@ -928,9 +985,12 @@ public:
                     const LineData& data = m_lines.front();
                     out_string += data.line;
                     m_size -= data.line.length();
+#ifndef NDEBUG
+                    const size_t output_line_count = data.output_line_count;
+#endif // NDEBUG
                     m_lines.pop_front();
 #ifndef NDEBUG
-                    m_statistics.remove_line();
+                    m_statistics.remove_lines(output_line_count);
 #endif // NDEBUG
                 }
             } else {
@@ -1440,7 +1500,7 @@ void GCodeProcessor::run_post_process()
 
     unsigned int line_id = 0;
     // Backtrace data for Tx gcode lines
-    const ExportLines::Backtrace backtrace_T = { m_preheat_time, m_preheat_steps };
+    const ExportLines::Backtrace backtrace_T = { m_preheat_time, m_preheat_steps, m_reassert_preheat_after_toolchange };
     // In case there are multiple sources of backtracing, keeps track of the longest backtrack time needed
     // to flush the backtrace cache accordingly
     float max_backtrace_time = 120.0f;
@@ -2920,6 +2980,7 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
     m_is_XL_printer = is_XL_printer(config);
     m_preheat_time = config.preheat_time;
     m_preheat_steps = config.preheat_steps;
+    m_reassert_preheat_after_toolchange = config.reassert_preheat_after_toolchange.value;
     // sanity check
     if(m_preheat_steps < 1)
         m_preheat_steps = 1;
@@ -3111,6 +3172,10 @@ void GCodeProcessor::apply_config(const DynamicPrintConfig& config)
     const ConfigOptionBool* enable_pre_heating = config.option<ConfigOptionBool>("enable_pre_heating");
     if (enable_pre_heating != nullptr)
         m_enable_pre_heating = enable_pre_heating->value;
+
+    const ConfigOptionBool* reassert_preheat_after_toolchange = config.option<ConfigOptionBool>("reassert_preheat_after_toolchange");
+    if (reassert_preheat_after_toolchange != nullptr)
+        m_reassert_preheat_after_toolchange = reassert_preheat_after_toolchange->value;
 
     const ConfigOptionBool* handle_hotend_as_extruder = config.option<ConfigOptionBool>("handle_hotend_as_extruder");
     if (handle_hotend_as_extruder != nullptr)
@@ -3571,6 +3636,7 @@ void GCodeProcessor::reset()
     m_seams_count = 0;
     m_preheat_time = 0.f;
     m_preheat_steps = 1;
+    m_reassert_preheat_after_toolchange = false;
 }
 
 static inline const char* skip_whitespaces(const char *begin, const char *end) {

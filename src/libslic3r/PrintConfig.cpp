@@ -6491,6 +6491,13 @@ void PrintConfigDef::init_fff_params()
     def->mode = comDevelop;
     def->set_default_value(new ConfigOptionInt(1));
 
+    def = this->add("reassert_preheat_after_toolchange", coBool);
+    def->label = L("Reassert preheat after tool change");
+    def->tooltip = L("When a preheat command is moved across one or more tool changes, repeat the command after each intermediate tool change. "
+                     "This is intended for printers whose tool-change command may reset or cool mapped physical hotends.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
 
     def = this->add("file_start_gcode", coString);
     def->label = L("File header G-code");

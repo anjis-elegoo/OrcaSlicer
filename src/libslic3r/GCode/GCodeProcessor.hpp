@@ -1173,6 +1173,7 @@ class Print;
         bool m_single_extruder_multi_material;
         float m_preheat_time;
         int m_preheat_steps;
+        bool m_reassert_preheat_after_toolchange{ false };
         bool m_disable_m73;
         std::string m_printer_model;
 

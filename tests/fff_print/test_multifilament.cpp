@@ -696,6 +696,116 @@ TEST_CASE("Toolchange temperature commands are unchanged when the wipe tower wai
     CHECK(trace.size() == golden.size());
 }
 
+TEST_CASE("Logical preheat is reasserted after crossed tool changes", "[MultiFilament][Regression]")
+{
+    const auto make_gcode = [](bool reassert) {
+        return slice_with_object_overrides(
+            { make_cube(5., 5., 1.), make_cube(5., 5., 1.), make_cube(5., 5., 1.), make_cube(5., 5., 1.) },
+            multifilament_config(4, {
+                { "nozzle_diameter",                       "0.4,0.4,0.4,0.4" },
+                { "printer_extruder_id",                   "1,2,3,4" },
+                { "printer_extruder_variant",              "Direct Drive Standard,Direct Drive Standard,Direct Drive Standard,Direct Drive Standard" },
+                { "extruder_printable_height",             "0,0,0,0" },
+                { "single_extruder_multi_material",        0 },
+                { "enable_prime_tower",                    0 },
+                { "ooze_prevention",                       1 },
+                { "standby_temperature_delta",             0 },
+                { "preheat_time",                          30 },
+                { "preheat_steps",                         1 },
+                { "reassert_preheat_after_toolchange",     reassert ? 1 : 0 },
+            }),
+            { { { "extruder", 1 } }, { { "extruder", 2 } }, { { "extruder", 3 } }, { { "extruder", 4 } } });
+    };
+
+    const auto count_reassertions = [](const std::string& gcode) {
+        std::vector<std::string> lines;
+        std::istringstream stream(gcode);
+        for (std::string line; std::getline(stream, line);)
+            lines.emplace_back(std::move(line));
+
+        size_t count = 0;
+        for (size_t i = 0; i + 1 < lines.size(); ++i) {
+            const bool toolchange = lines[i].size() >= 2 && lines[i][0] == 'T' && std::isdigit(static_cast<unsigned char>(lines[i][1]));
+            const size_t target_at = lines[i + 1].find("; preheat T");
+            const bool preheat = lines[i + 1].rfind("M104", 0) == 0 && target_at != std::string::npos &&
+                                 target_at + 11 < lines[i + 1].size() &&
+                                 std::isdigit(static_cast<unsigned char>(lines[i + 1][target_at + 11]));
+            if (toolchange && preheat && std::stoi(lines[i].substr(1)) != std::stoi(lines[i + 1].substr(target_at + 11)))
+                ++count;
+        }
+        return count;
+    };
+
+    const size_t disabled_count = count_reassertions(make_gcode(false));
+    const size_t enabled_count  = count_reassertions(make_gcode(true));
+    CHECK(enabled_count > disabled_count);
+}
+
+TEST_CASE("Crossed tool preheats survive backtrace stop boundaries", "[MultiFilament][Regression]")
+{
+    // The deliberately long lead forces the first T1 backtrace to stop at G28 and the following
+    // T0 backtrace to stop at the previous T0. Both have crossed a different active tool and must
+    // therefore keep the reassertion even though no primary backtraced M104 can be placed.
+    const std::string gcode = slice_with_object_overrides(
+        { make_cube(5., 5., 0.4), make_cube(5., 5., 0.4) },
+        multifilament_config(2, {
+            { "nozzle_diameter",                       "0.4,0.4" },
+            { "printer_extruder_id",                   "1,2" },
+            { "printer_extruder_variant",              "Direct Drive Standard,Direct Drive Standard" },
+            { "extruder_printable_height",             "0,0" },
+            { "single_extruder_multi_material",        0 },
+            { "enable_prime_tower",                    0 },
+            { "ooze_prevention",                       1 },
+            { "standby_temperature_delta",             0 },
+            { "preheat_time",                          10000 },
+            { "preheat_steps",                         1 },
+            { "reassert_preheat_after_toolchange",     1 },
+            { "machine_start_gcode",                   "G28\nT0\nM109 S210 T0\n" },
+        }),
+        { { { "extruder", 1 } }, { { "extruder", 2 } } });
+
+    std::vector<std::string> lines;
+    std::istringstream stream(gcode);
+    for (std::string line; std::getline(stream, line);)
+        lines.emplace_back(std::move(line));
+
+    struct ToolLine { size_t line; int tool; };
+    std::vector<ToolLine> tools;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (lines[i].size() >= 2 && lines[i][0] == 'T' && std::isdigit(static_cast<unsigned char>(lines[i][1])))
+            tools.push_back({ i, std::stoi(lines[i].substr(1)) });
+    }
+
+    const auto has_preheat_after = [&lines](size_t tool_line, int target_tool) {
+        const std::string token = " T" + std::to_string(target_tool);
+        for (size_t i = tool_line + 1; i < lines.size() && lines[i].rfind("M104", 0) == 0; ++i) {
+            const size_t at = lines[i].find(token);
+            const size_t token_end = at == std::string::npos ? std::string::npos : at + token.size();
+            const bool exact_tool = at != std::string::npos &&
+                                    (token_end == lines[i].size() || !std::isdigit(static_cast<unsigned char>(lines[i][token_end])));
+            if (exact_tool &&
+                lines[i].find("; preheat T" + std::to_string(target_tool)) != std::string::npos)
+                return true;
+        }
+        return false;
+    };
+
+    bool checked_start_boundary = false;
+    bool checked_same_tool_boundary = false;
+    bool found_tool_sequence = false;
+    for (size_t i = 0; i + 2 < tools.size(); ++i) {
+        if (tools[i].tool != 0 || tools[i + 1].tool != 1 || tools[i + 2].tool != 0)
+            continue;
+        found_tool_sequence       = true;
+        checked_start_boundary     = has_preheat_after(tools[i].line, 1);
+        checked_same_tool_boundary = has_preheat_after(tools[i + 1].line, 0);
+        break;
+    }
+    REQUIRE(found_tool_sequence);
+    CHECK(checked_start_boundary);
+    CHECK(checked_same_tool_boundary);
+}
+
 // max_layer_height can be shorter than the extruder count (normalization sizes it to the
 // filament count under single_extruder_multi_material). calc_max_layer_height() in ToolOrdering
 // indexed it per-nozzle and read past the end. Shortened directly here to isolate that read;

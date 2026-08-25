@@ -1146,6 +1146,7 @@ static std::vector<std::string> s_Preset_print_options{
     "standby_temperature_delta",
     "preheat_time",
     "preheat_steps",
+    "reassert_preheat_after_toolchange",
     "interface_shells",
     "line_width",
     "initial_layer_line_width",

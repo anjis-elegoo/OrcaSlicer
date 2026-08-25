@@ -200,6 +200,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "standby_temperature_delta",
         "preheat_time",
         "preheat_steps",
+        "reassert_preheat_after_toolchange",
         "machine_start_gcode",
         "filament_start_gcode",
         "change_filament_gcode",

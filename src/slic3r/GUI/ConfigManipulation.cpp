@@ -976,6 +976,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("preheat_time", have_ooze_prevention);
     int preheat_steps = config->opt_int("preheat_steps");
     toggle_line("preheat_steps", have_ooze_prevention && (preheat_steps > 0));
+    toggle_line("reassert_preheat_after_toolchange", have_ooze_prevention && config->opt_float("preheat_time") > 0.f);
 
     bool have_prime_tower = config->opt_bool("enable_prime_tower");
     for (auto el : {"prime_tower_width", "prime_tower_brim_width", "prime_tower_skip_points", "wipe_tower_wall_type", "prime_tower_infill_gap","prime_tower_enable_framework", "enable_tower_interface_features"})
