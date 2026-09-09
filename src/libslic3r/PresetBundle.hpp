@@ -76,7 +76,7 @@ struct FilamentBaseInfo
     int temperature_vitrification = INT_MAX;
     bool is_support{ false };
     bool is_system{ true };
-    int  filament_printable = 3;
+    int  filament_printable = -1;
 
     // filament_extruder_compatibility packs one compatibility level per extruder into a single
     // 32-bit int, 3 bits per extruder (up to 10 extruders). Levels: 0 = printable, 1 = error,

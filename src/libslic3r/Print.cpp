@@ -339,6 +339,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "filament_max_volumetric_speed"
             || opt_key == "gcode_flavor"
             || opt_key == "single_extruder_multi_material"
+            || opt_key == "multi_extruder_multi_filament"
             || opt_key == "nozzle_temperature"
             // BBS
             || opt_key == "supertack_plate_temp"
@@ -4129,15 +4130,15 @@ std::vector<std::set<int>> Print::get_physical_unprintable_filaments(const std::
     if (extruder_num < 2)
         return physical_unprintables;
 
-    auto get_unprintable_extruder_id = [&](unsigned int filament_idx) -> int {
+    auto get_unprintable_extruders = [&](unsigned int filament_idx) {
+        std::vector<int> ids;
         // filament_printable may be shorter than the filament count; get_at() clamps.
         int status = m_config.filament_printable.get_at(filament_idx);
         for (int i = 0; i < extruder_num; ++i) {
-            if (!(status >> i & 1)) {
-                return i;
-            }
+            if (!(status >> i & 1))
+                ids.push_back(i);
         }
-        return -1;
+        return ids;
     };
 
 
@@ -4148,10 +4149,8 @@ std::vector<std::set<int>> Print::get_physical_unprintable_filaments(const std::
     }
 
     for (auto f : used_filaments) {
-        int extruder_id = get_unprintable_extruder_id(f);
-        if (extruder_id == -1)
-            continue;
-        physical_unprintables[extruder_id].insert(f);
+        for (int extruder_id : get_unprintable_extruders(f))
+            physical_unprintables[extruder_id].insert(f);
     }
 
     return physical_unprintables;
@@ -4556,7 +4555,6 @@ void Print::_make_wipe_tower()
         // group result set on the tower above resolves each filament to its nozzle slot per layer.
         MultiNozzleUtils::NozzleStatusRecorder nozzle_recorder;
 
-        std::vector<int>filament_maps = get_filament_maps();
         int layer_idx = -1;
 
         unsigned int current_filament_id = m_wipe_tower_data.tool_ordering.first_extruder();
@@ -4606,8 +4604,11 @@ void Print::_make_wipe_tower()
                 }
 
                 //During the filament change, the extruder will extrude an extra length of grab_length for the corresponding detection, so the purge can reduce this length.
-                int grab_extruder_id = filament_maps[filament_id] - 1;
-                float grab_purge_volume = m_config.grab_length.get_at(grab_extruder_id) * 2.4; //(diameter/2)^2*PI=2.4
+                const size_t grab_extruder_id = get_extruder_index(m_config, filament_id);
+                const float grab_length = grab_extruder_id < m_config.grab_length.size()
+                    ? float(m_config.grab_length.get_at(grab_extruder_id))
+                    : 0.f;
+                float grab_purge_volume = grab_length * 2.4f; //(diameter/2)^2*PI=2.4
                 volume_to_purge = std::max(0.f, volume_to_purge - grab_purge_volume);
 
                 // Prime volume per-filament: the tower now picks extruder-change vs nozzle-change

@@ -216,6 +216,7 @@ inline void to_json(json& j, const FilamentGroupContext::MachineInfo& mi) {
 
     j["prefer_non_model_filament"] = mi.prefer_non_model_filament;
     j["master_extruder_id"] = mi.master_extruder_id;
+    j["use_master_extruder_preference"] = mi.use_master_extruder_preference;
 }
 
 inline void from_json(const json& j, FilamentGroupContext::MachineInfo& mi) {
@@ -231,6 +232,8 @@ inline void from_json(const json& j, FilamentGroupContext::MachineInfo& mi) {
 
     j.at("prefer_non_model_filament").get_to(mi.prefer_non_model_filament);
     j.at("master_extruder_id").get_to(mi.master_extruder_id);
+    if (j.contains("use_master_extruder_preference"))
+        j.at("use_master_extruder_preference").get_to(mi.use_master_extruder_preference);
 }
 
 // ============ FilamentGroupContext::SpeedInfo ============

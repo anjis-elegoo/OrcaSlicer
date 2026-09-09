@@ -1019,6 +1019,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_field("print_order", !have_sequential_printing);
 
     toggle_field("single_extruder_multi_material", !is_BBL_Printer);
+    toggle_field("multi_extruder_multi_filament", !is_BBL_Printer);
 
     auto bSEMM = preset_bundle->printers.get_edited_preset().config.opt_bool("single_extruder_multi_material");
     const bool supports_wipe_tower_2 = !is_BBL_Printer && preset_bundle->printers.get_edited_preset().config.opt_enum<WipeTowerType>("wipe_tower_type") == WipeTowerType::Type2;

@@ -444,6 +444,86 @@ TEST_CASE("update_used_filament_values merges only used filaments", "[ToolOrderi
     REQUIRE(FilamentGroupUtils::update_used_filament_values(old_values, new_values, {}) == old_values);
 }
 
+TEST_CASE("collect_unprintable_limits keeps per-extruder bans for N extruders", "[FilamentGroup]")
+{
+    std::vector<std::set<int>> physical = {{0}, {1}, {0, 2}};
+    std::vector<std::set<int>> geometric = {{}, {2}, {}};
+    std::vector<std::set<int>> limits;
+    bool ok = FilamentGroupUtils::collect_unprintable_limits(physical, geometric, limits);
+    REQUIRE(ok);
+    REQUIRE(limits.size() == 3);
+    REQUIRE(limits[0] == std::set<int>{0});
+    REQUIRE(limits[1] == std::set<int>{1, 2});
+    REQUIRE(limits[2] == std::set<int>{0, 2});
+
+    // Forbidden on every extruder is dropped and reported as a conflict.
+    physical = {{3}, {3}, {3}};
+    geometric = {{}, {}, {}};
+    ok = FilamentGroupUtils::collect_unprintable_limits(physical, geometric, limits);
+    REQUIRE_FALSE(ok);
+    REQUIRE(limits[0].count(3) == 0);
+    REQUIRE(limits[1].count(3) == 0);
+    REQUIRE(limits[2].count(3) == 0);
+}
+
+TEST_CASE("Conflicting constraint types preserve physical bans", "[FilamentGroup][Regression]")
+{
+    for (size_t extruder_count : {2u, 3u, 4u}) {
+        CAPTURE(extruder_count);
+        std::vector<std::set<int>> physical(extruder_count, {0});
+        physical.back().clear();
+        std::vector<std::set<int>> geometric(extruder_count);
+        geometric.back().insert(0);
+        std::vector<std::set<int>> limits;
+
+        REQUIRE_FALSE(FilamentGroupUtils::collect_unprintable_limits(physical, geometric, limits));
+        REQUIRE(limits == physical);
+    }
+}
+
+TEST_CASE("All-extruder bans are cleared separately before merging constraint types", "[FilamentGroup][Regression]")
+{
+    for (size_t extruder_count : {2u, 3u, 4u}) {
+        CAPTURE(extruder_count);
+        std::vector<std::set<int>> all_banned(extruder_count, {0});
+        std::vector<std::set<int>> partial_bans(extruder_count);
+        partial_bans.back().insert(0);
+        std::vector<std::set<int>> limits;
+
+        REQUIRE_FALSE(FilamentGroupUtils::collect_unprintable_limits(all_banned, partial_bans, limits));
+        REQUIRE(limits == partial_bans);
+        REQUIRE_FALSE(FilamentGroupUtils::collect_unprintable_limits(partial_bans, all_banned, limits));
+        REQUIRE(limits == partial_bans);
+    }
+}
+
+TEST_CASE("Merged constraints keep multiple bans when another extruder is available", "[FilamentGroup][Regression]")
+{
+    const std::vector<std::set<int>> physical = {{0}, {}, {}};
+    const std::vector<std::set<int>> geometric = {{}, {0}, {}};
+    std::vector<std::set<int>> limits;
+
+    REQUIRE(FilamentGroupUtils::collect_unprintable_limits(physical, geometric, limits));
+    REQUIRE(limits == std::vector<std::set<int>>{{0}, {0}, {}});
+}
+
+TEST_CASE("Minimum-flush reorder preserves filaments assigned to every physical extruder", "[ToolOrdering][NExtruder]")
+{
+    std::vector<unsigned int> filament_list = {0, 1, 2, 3};
+    std::vector<int> filament_map = {0, 1, 2, 3};
+    std::vector<std::vector<unsigned int>> layer_filaments = {{0, 1, 2, 3}};
+    std::vector<std::vector<std::vector<float>>> flush_matrices(
+        4, std::vector<std::vector<float>>(4, std::vector<float>(4, 0.f)));
+    std::vector<std::vector<unsigned int>> sequences;
+
+    REQUIRE_NOTHROW(reorder_filaments_for_minimum_flush_volume(
+        filament_list, filament_map, layer_filaments, flush_matrices, std::nullopt, &sequences));
+    REQUIRE(sequences.size() == 1);
+    REQUIRE(sequences.front().size() == 4);
+    REQUIRE(std::set<unsigned int>(sequences.front().begin(), sequences.front().end())
+            == std::set<unsigned int>({0, 1, 2, 3}));
+}
+
 TEST_CASE("Print config-index resolvers pick per-filament Hybrid slots", "[Print][H2C]")
 {
     // A 2-extruder printer whose second extruder is Hybrid (Standard + High Flow nozzles).

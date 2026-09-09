@@ -1419,18 +1419,23 @@ void GCodeViewer::load_as_gcode(const GCodeProcessorResult& gcode_result, const 
 
     // BBS: data for rendering color arrangement recommendation
     m_nozzle_nums = print.config().option<ConfigOptionFloats>("nozzle_diameter")->values.size();
-    // Orca hack: Hide filament group for non-bbl printers
-    if (!print.is_BBL_printer()) m_nozzle_nums = 1;
-    std::vector<int>         filament_maps = print.get_filament_maps();
+    m_is_bbl_printer = print.is_BBL_printer();
+    if (!m_is_bbl_printer && !print.config().multi_extruder_multi_filament)
+        m_nozzle_nums = 1;
+    m_extruder_filaments.assign(m_nozzle_nums, {});
+    const std::vector<int> filament_maps = print.get_filament_maps();
     std::vector<std::string> color_opt     = print.config().option<ConfigOptionStrings>("filament_colour")->values;
     std::vector<std::string> type_opt      = print.config().option<ConfigOptionStrings>("filament_type")->values;
     std::vector<unsigned char> support_filament_opt = print.config().option<ConfigOptionBools>("filament_is_support")->values;
     for (auto extruder_id : m_viewer.get_used_extruders_ids()) {
-        if (filament_maps[extruder_id] == 1) {
-            m_left_extruder_filament.push_back({type_opt[extruder_id], color_opt[extruder_id], extruder_id, (bool)(support_filament_opt[extruder_id])});
-        } else {
-            m_right_extruder_filament.push_back({type_opt[extruder_id], color_opt[extruder_id], extruder_id, (bool)(support_filament_opt[extruder_id])});
-        }
+        if (extruder_id >= filament_maps.size() || extruder_id >= type_opt.size()
+            || extruder_id >= color_opt.size() || extruder_id >= support_filament_opt.size())
+            continue;
+        const int physical_extruder_id = filament_maps[extruder_id] - 1;
+        if (physical_extruder_id < 0 || physical_extruder_id >= int(m_extruder_filaments.size()))
+            continue;
+        m_extruder_filaments[physical_extruder_id].push_back(
+            {type_opt[extruder_id], color_opt[extruder_id], extruder_id, bool(support_filament_opt[extruder_id])});
     }
 
     m_settings_ids = gcode_result.settings_ids;
@@ -1615,8 +1620,7 @@ void GCodeViewer::reset()
     m_move_type_distances.fill(0.0f);
     m_print_statistics.reset();
     m_custom_gcode_per_print_z = std::vector<CustomGCode::Item>();
-    m_left_extruder_filament.clear();
-    m_right_extruder_filament.clear();
+    m_extruder_filaments.clear();
     m_sequential_view.gcode_window.reset();
     m_contained_in_bed = true;
 }
@@ -3001,8 +3005,7 @@ void GCodeViewer::render_legend_color_arr_recommen(float window_padding)
         float three_words_width    = imgui.calc_text_size("ABC"sv).x;
         const int line_capacity = 4;
 
-        for (const auto& extruder_filaments : {m_left_extruder_filament,m_right_extruder_filament })
-        {
+        for (const auto &extruder_filaments : m_extruder_filaments) {
             float container_height = 0.f;
             for (size_t idx = 0; idx < extruder_filaments.size(); idx += line_capacity) {
                 float text_line_height = 0;
@@ -3033,7 +3036,8 @@ void GCodeViewer::render_legend_color_arr_recommen(float window_padding)
     else
         tips_count = 5;
 
-    float AMS_container_height = ams_item_height + line_height * tips_count + line_height;
+    const size_t group_rows = (m_extruder_filaments.size() + 1) / 2;
+    float AMS_container_height = ams_item_height * group_rows + line_height * tips_count + line_height;
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0)); // this shold be 0 since its child of gcodeviewer
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(window_padding * 3, 0));
@@ -3041,9 +3045,9 @@ void GCodeViewer::render_legend_color_arr_recommen(float window_padding)
     // ImGui::Dummy({window_padding, window_padding});
     ImGui::BeginChild("#AMS", ImVec2(0, AMS_container_height), true, ImGuiWindowFlags_AlwaysUseWindowPadding);
     {
-        float available_width   = ImGui::GetContentRegionAvail().x;
-        float half_width       = available_width * 0.49f;
-        float spacing           = 18.0f * m_scale;
+        float available_width = ImGui::GetContentRegionAvail().x;
+        float spacing         = 18.0f * m_scale;
+        float half_width      = (available_width - spacing) * 0.5f;
 
         ImGui::Dummy({window_padding, window_padding});
         ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(1.0f,1.0f,1.0f,0.6f));
@@ -3060,34 +3064,29 @@ void GCodeViewer::render_legend_color_arr_recommen(float window_padding)
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(window_padding * 2, window_padding));
 
         ImDrawList *child_begin_draw_list = ImGui::GetWindowDrawList();
-        ImVec2      cursor_pos            = ImGui::GetCursorScreenPos();
-        child_begin_draw_list->AddRectFilled(cursor_pos, ImVec2(cursor_pos.x + half_width, cursor_pos.y + line_height), IM_COL32(255, 255, 255, 10));
-        ImGui::BeginChild("#LeftAMS", ImVec2(half_width, ams_item_height), false, ImGuiWindowFlags_AlwaysUseWindowPadding);
-        {
-            imgui.text(_u8L("Left nozzle"));
+        for (size_t extruder_id = 0; extruder_id < m_extruder_filaments.size(); ++extruder_id) {
+            ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+            child_begin_draw_list->AddRectFilled(
+                cursor_pos, ImVec2(cursor_pos.x + half_width, cursor_pos.y + line_height), IM_COL32(255, 255, 255, 10));
+
+            const std::string child_id = "##ExtruderFilaments" + std::to_string(extruder_id);
+            ImGui::BeginChild(child_id.c_str(), ImVec2(half_width, ams_item_height), false, ImGuiWindowFlags_AlwaysUseWindowPadding);
+            if (m_is_bbl_printer && m_extruder_filaments.size() == 2)
+                imgui.text(extruder_id == 0 ? _u8L("Left nozzle") : _u8L("Right nozzle"));
+            else
+                imgui.text(_u8L("Extruder") + " " + std::to_string(extruder_id + 1));
             ImGui::Dummy({window_padding, window_padding});
             int index = 1;
-            for (const auto &extruder_filament : m_left_extruder_filament) {
-                imgui.filament_group(get_filament_display_type(extruder_filament), extruder_filament.hex_color.c_str(), extruder_filament.filament_id, filament_group_item_align_width);
-                if (index % 4 != 0) { ImGui::SameLine(0, spacing); }
-                index++;
+            for (const auto &extruder_filament : m_extruder_filaments[extruder_id]) {
+                imgui.filament_group(get_filament_display_type(extruder_filament), extruder_filament.hex_color.c_str(),
+                                     extruder_filament.filament_id, filament_group_item_align_width);
+                if (index % 4 != 0)
+                    ImGui::SameLine(0, spacing);
+                ++index;
             }
             ImGui::EndChild();
-        }
-        ImGui::SameLine();
-        cursor_pos = ImGui::GetCursorScreenPos();
-        child_begin_draw_list->AddRectFilled(cursor_pos, ImVec2(cursor_pos.x + half_width, cursor_pos.y + line_height), IM_COL32(255, 255, 255, 10));
-        ImGui::BeginChild("#RightAMS", ImVec2(half_width, ams_item_height), false, ImGuiWindowFlags_AlwaysUseWindowPadding);
-        {
-            imgui.text(_u8L("Right nozzle"));
-            ImGui::Dummy({window_padding, window_padding});
-            int index = 1;
-            for (const auto &extruder_filament : m_right_extruder_filament) {
-                imgui.filament_group(get_filament_display_type(extruder_filament), extruder_filament.hex_color.c_str(), extruder_filament.filament_id, filament_group_item_align_width);
-                if (index % 4 != 0) { ImGui::SameLine(0, spacing); }
-                index++;
-            }
-            ImGui::EndChild();
+            if (extruder_id % 2 == 0 && extruder_id + 1 < m_extruder_filaments.size())
+                ImGui::SameLine(0, spacing);
         }
         ImGui::PopStyleColor(1);
         ImGui::PopStyleVar(1);

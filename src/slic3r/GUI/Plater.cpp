@@ -6091,7 +6091,8 @@ bool Sidebar::should_show_SEMM_buttons()
     bool is_bbl_vendor = preset_bundle.is_bbl_vendor();
     auto cfg = preset_bundle.printers.get_edited_preset().config;
 
-    return cfg.opt_bool("single_extruder_multi_material") || is_bbl_vendor;
+    return cfg.opt_bool("single_extruder_multi_material") || is_bbl_vendor
+        || cfg.opt_bool("multi_extruder_multi_filament");
 }
 
 void Sidebar::show_SEMM_buttons()

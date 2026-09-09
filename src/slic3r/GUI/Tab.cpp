@@ -1909,7 +1909,7 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     }
 
 
-    if (opt_key == "single_extruder_multi_material"  ){
+    if (opt_key == "single_extruder_multi_material" || opt_key == "multi_extruder_multi_filament") {
         wxGetApp().sidebar().show_SEMM_buttons();
         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     }
@@ -1981,7 +1981,7 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     }
 
 
-    if (opt_key == "single_extruder_multi_material"  ){
+    if (opt_key == "single_extruder_multi_material" || opt_key == "multi_extruder_multi_filament") {
         wxGetApp().sidebar().show_SEMM_buttons();
         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     }
@@ -2235,7 +2235,8 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
 
 
     //Orca: sync filament num if it's a multi tool printer
-    if (opt_key == "extruders_count" && !m_config->opt_bool("single_extruder_multi_material")){
+    if (opt_key == "extruders_count" && !m_config->opt_bool("single_extruder_multi_material")
+        && !m_config->opt_bool("multi_extruder_multi_filament")) {
         const size_t num_extruder = boost::any_cast<size_t>(value);
         auto        *bundle       = wxGetApp().preset_bundle;
         Sidebar     &sidebar      = wxGetApp().plater()->sidebar();
@@ -5593,8 +5594,9 @@ if (is_marlin_flavor)
     if (from_initial_build) {
         // create a page, but pretend it's an extruder page, so we can add it to m_pages ourselves
         auto page     = add_options_page(L("Multimaterial"), "custom-gcode_multi_material", true); // ORCA: icon only visible on placeholders
-        auto optgroup = page->new_optgroup(L("Single extruder multi-material setup"), "param_multi_material");
+        auto optgroup = page->new_optgroup(L("Multi-material setup"), "param_multi_material");
         optgroup->append_single_option_line("single_extruder_multi_material", "printer_multimaterial_setup#single-extruder-multi-material");
+        optgroup->append_single_option_line("multi_extruder_multi_filament");
         ConfigOptionDef def;
         def.type    = coInt, def.set_default_value(new ConfigOptionInt((int) m_extruders_count));
         def.label   = L("Extruders");

@@ -473,6 +473,15 @@ void Preset::normalize(DynamicPrintConfig &config)
             n = nozzle_diameter->values.size();
             // Loaded the FFF Printer settings. Verify, that all extruder dependent values have enough values.
             config.set_num_extruders((unsigned int) n);
+
+            // A multi-nozzle multi-filament project may contain more logical filaments than
+            // physical extruders. Keep those filament vectors at their serialized size;
+            // load_config_file_config() splits them by logical filament index afterwards.
+            const auto *filament_colours = dynamic_cast<const ConfigOptionStrings*>(config.option("filament_colour"));
+            if (config.option("multi_extruder_multi_filament") != nullptr
+                && config.opt_bool("multi_extruder_multi_filament")
+                && filament_colours != nullptr)
+                n = std::max(n, filament_colours->values.size());
         }
     }
 
@@ -1467,7 +1476,7 @@ static std::vector<std::string> s_Preset_printer_options {
     "disable_m73", "preferred_orientation", "emit_machine_limits_to_gcode", "pellet_modded_printer", "support_multi_bed_types", "use_3mf", "default_bed_type", "bed_mesh_min","bed_mesh_max","bed_mesh_probe_distance", "adaptive_bed_mesh_margin", "enable_long_retraction_when_cut","long_retractions_when_cut","retraction_distances_when_cut",
     "bed_temperature_formula", "nozzle_flush_dataset",
     // Multi-nozzle count + pre-heat model printer options
-    "extruder_max_nozzle_count", "group_algo_with_time", "enable_pre_heating", "hotend_heating_rate", "hotend_cooling_rate",
+    "extruder_max_nozzle_count", "group_algo_with_time", "use_master_extruder_preference", "multi_extruder_multi_filament", "enable_pre_heating", "hotend_heating_rate", "hotend_cooling_rate",
     "machine_hotend_change_time", "machine_prepare_compensation_time",
     // Fast-purge printer flag + device/firmware-facing per-variant extruder-change
     // deretraction speed (unconsumed by the slicer; carried by H2D/A2L/X2D/P2S machine profiles).
@@ -2567,7 +2576,8 @@ static bool profile_print_params_same(const DynamicPrintConfig &cfg_old, const D
     for (const char *key : { "compatible_prints", "compatible_prints_condition",
                              "compatible_printers", "compatible_printers_condition", "inherits",
                              "print_settings_id", "filament_settings_id", "sla_print_settings_id", "sla_material_settings_id", "printer_settings_id",
-                             "printer_model", "printer_variant", "default_print_profile", "default_filament_profile", "default_sla_print_profile", "default_sla_material_profile"
+                             "printer_model", "printer_variant", "default_print_profile", "default_filament_profile", "default_sla_print_profile", "default_sla_material_profile",
+                             "filament_self_index"
                              })
         diff.erase(std::remove(diff.begin(), diff.end(), key), diff.end());
     // Preset with the same name as stored inside the config exists.
