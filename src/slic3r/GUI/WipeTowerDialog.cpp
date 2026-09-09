@@ -336,6 +336,18 @@ wxString WipingDialog::BuildTableObjStr()
     obj["flush_multiplier"] = flush_multiplier;
     obj["extruder_num"] = nozzle_num;
     obj["filament_colors"] = filament_colors;
+    {
+        json labels = json::array();
+        const bool bambu_left_right = wxGetApp().preset_bundle->is_bbl_vendor() && nozzle_num == 2;
+        if (bambu_left_right) {
+            labels.push_back(into_u8(_L("Left extruder")));
+            labels.push_back(into_u8(_L("Right extruder")));
+        } else {
+            for (int idx = 0; idx < nozzle_num; ++idx)
+                labels.push_back(into_u8(wxString::Format("%s %d", _L("Extruder"), idx + 1)));
+        }
+        obj["extruder_labels"] = labels;
+    }
     obj["flush_volume_matrixs"] = json::array();
     obj["min_flush_volumes"] = json::array();
     obj["max_flush_volumes"] = json::array();
@@ -360,7 +372,7 @@ wxString WipingDialog::BuildTableObjStr()
         obj["max_flush_volumes"].push_back(m_max_flush_volume);
     }
 
-    auto obj_str = obj.dump();
+    auto obj_str = obj.dump(-1, ' ', true);
     return obj_str;
 }
 
@@ -495,13 +507,13 @@ WipingDialog::WipingDialog(wxWindow* parent, const int max_flush_volume) :
                 auto table_obj_str = BuildTableObjStr();
                 auto text_obj_str = BuildTextObjStr(true);
                 CallAfter([table_obj_str, text_obj_str, this] {
-                    wxString script1 = wxString::Format("buildTable(%s)", table_obj_str);
+                    wxString script1 = "buildTable(" + table_obj_str + ")";
                     m_webview->RunScript(script1);
-                    wxString script2 = wxString::Format("buildText(%s)", text_obj_str);
+                    wxString script2 = "buildText(" + text_obj_str + ")";
                     bool result = m_webview->RunScript(script2);
                     if (!result) {
                         BOOST_LOG_TRIVIAL(error) << __FUNCTION__<< "Failed to run buildText, retry without multi language";
-                        wxString script3 = wxString::Format("buildText(%s)", BuildTextObjStr(false));
+                        wxString script3 = "buildText(" + BuildTextObjStr(false) + ")";
                         m_webview->RunScript(script3);
                     }
                     });
