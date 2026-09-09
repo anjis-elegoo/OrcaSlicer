@@ -26,12 +26,6 @@ public:
 
     std::vector<int> GetFilamentMaps() const;
     std::vector<int> GetFilamentVolumeMaps() const;
-    std::vector<int> GetLeftFilaments() const { return m_left_panel->GetAllFilaments(); }
-    std::vector<int> GetRightFilaments() const { return m_right_panel->GetAllFilaments(); }
-
-    std::vector<int> GetRightHighFlowFilaments() const { return m_right_panel->GetHighFlowFilaments(); }
-    std::vector<int> GetRightStandardFilaments() const { return m_right_panel->GetStandardFilaments(); }
-    std::vector<int> GetRightTPUHighFlowFilaments() const { return m_right_panel->GetTPUHighFlowFilaments(); }
     void UpdateNozzleVolumeType();
     void UpdateNozzleCountDisplay();
 
@@ -44,15 +38,13 @@ private:
     void OnDragDropCompleted(wxCommandEvent &evt);
     void OnSuggestionClicked(wxCommandEvent &event);
 
-    DragDropPanel          *m_left_panel;
-    SeparatedDragDropPanel *m_right_panel;
+    std::vector<SeparatedDragDropPanel *> m_extruder_panels;
 
     Label   *m_description;
     Label   *m_tips;
     Label   *m_errors;
     wxPanel *m_suggestion_panel;
-
-    ScalableButton *m_switch_btn;
+    ScalableButton *m_switch_btn{nullptr};
 
     std::vector<int>         m_filament_map;
     std::vector<int>         m_filament_volume_map;

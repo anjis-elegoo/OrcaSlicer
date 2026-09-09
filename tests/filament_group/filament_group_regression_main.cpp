@@ -328,3 +328,159 @@ TEST_CASE("FilamentGroup property checks", "[filament_group][property]") {
         }
     }
 }
+
+TEST_CASE("Match grouping supports equivalent extruders without a master preference", "[filament_group][topology]")
+{
+    constexpr int extruder_count = 4;
+    constexpr int filament_count = 8;
+
+    FilamentGroupContext ctx{};
+    ctx.group_info.total_filament_num = filament_count;
+    ctx.group_info.mode = FGMode::MatchMode;
+    ctx.group_info.strategy = FGStrategy::BestCost;
+    ctx.group_info.filament_volume_map.assign(filament_count, (int) NozzleVolumeType::nvtHybrid);
+    ctx.machine_info.master_extruder_id = 0;
+    ctx.machine_info.use_master_extruder_preference = false;
+    ctx.machine_info.max_group_size.assign(extruder_count, filament_count);
+    ctx.machine_info.prefer_non_model_filament.assign(extruder_count, false);
+    ctx.machine_info.machine_filament_info.resize(extruder_count);
+    ctx.model_info.unprintable_filaments.resize(extruder_count);
+    ctx.model_info.layer_filaments = {std::vector<unsigned int>(filament_count)};
+    std::iota(ctx.model_info.layer_filaments.front().begin(), ctx.model_info.layer_filaments.front().end(), 0);
+
+    const FilamentGroupUtils::Color colors[] = {
+        FilamentGroupUtils::Color(10, 20, 30),
+        FilamentGroupUtils::Color(200, 10, 10),
+        FilamentGroupUtils::Color(10, 200, 10),
+        FilamentGroupUtils::Color(10, 10, 200),
+    };
+    ctx.model_info.filament_info.resize(filament_count);
+    for (int filament_id = 0; filament_id < filament_count; ++filament_id) {
+        FilamentGroupUtils::FilamentInfo filament;
+        filament.color = colors[filament_id % extruder_count];
+        filament.type = "PLA";
+        filament.is_support = false;
+        ctx.model_info.filament_info[filament_id] = filament;
+    }
+
+    for (int extruder_id = 0; extruder_id < extruder_count; ++extruder_id) {
+        ctx.nozzle_info.nozzle_list.push_back({"0.4", NozzleVolumeType::nvtStandard, extruder_id, extruder_id});
+        ctx.nozzle_info.extruder_nozzle_list[extruder_id] = {extruder_id};
+
+        FilamentGroupUtils::MachineFilamentInfo machine_filament;
+        machine_filament.color = colors[extruder_id];
+        machine_filament.type = "PLA";
+        machine_filament.is_support = false;
+        machine_filament.extruder_id = extruder_id;
+        machine_filament.is_extended = false;
+        ctx.machine_info.machine_filament_info[extruder_id].push_back(machine_filament);
+    }
+
+    const auto result = FilamentGroup(ctx).calc_filament_group_for_match();
+    std::vector<int> counts(extruder_count, 0);
+    for (int filament_id = 0; filament_id < filament_count; ++filament_id) {
+        REQUIRE(result[filament_id] >= 0);
+        REQUIRE(result[filament_id] < extruder_count);
+        ++counts[result[filament_id]];
+    }
+
+    const auto [min_count, max_count] = std::minmax_element(counts.begin(), counts.end());
+    CAPTURE(counts);
+    REQUIRE(*max_count - *min_count <= 1);
+}
+
+TEST_CASE("Flush grouping with a master extruder on four equivalent extruders", "[filament_group][topology]")
+{
+    constexpr int extruder_count = 4;
+    constexpr int filament_count = 4;
+    constexpr int master = 2;
+
+    FilamentGroupContext ctx{};
+    ctx.group_info.total_filament_num = filament_count;
+    ctx.group_info.max_gap_threshold = 0.0;
+    ctx.group_info.mode = FGMode::FlushMode;
+    ctx.group_info.strategy = FGStrategy::BestCost;
+    ctx.speed_info.group_with_time = false;
+    ctx.group_info.filament_volume_map.assign(filament_count, (int) NozzleVolumeType::nvtHybrid);
+    ctx.machine_info.master_extruder_id = master;
+    ctx.machine_info.use_master_extruder_preference = true;
+    ctx.machine_info.max_group_size.assign(extruder_count, filament_count);
+    ctx.machine_info.prefer_non_model_filament.assign(extruder_count, false);
+    ctx.model_info.unprintable_filaments.resize(extruder_count);
+    ctx.model_info.layer_filaments = {{0, 1, 2, 3}};
+    ctx.model_info.filament_info.resize(filament_count);
+    for (int filament_id = 0; filament_id < filament_count; ++filament_id) {
+        ctx.model_info.filament_info[filament_id].type = "PLA";
+        ctx.model_info.filament_info[filament_id].is_support = false;
+    }
+
+    ctx.model_info.flush_matrix.resize(extruder_count);
+    for (int extruder_id = 0; extruder_id < extruder_count; ++extruder_id) {
+        ctx.nozzle_info.nozzle_list.push_back({"0.4", NozzleVolumeType::nvtStandard, extruder_id, extruder_id});
+        ctx.nozzle_info.extruder_nozzle_list[extruder_id] = {extruder_id};
+        std::vector<std::vector<float>> matrix(filament_count, std::vector<float>(filament_count, 100.f));
+        for (int i = 0; i < filament_count; ++i)
+            matrix[i][i] = 0.f;
+        ctx.model_info.flush_matrix[extruder_id] = std::move(matrix);
+    }
+
+    const auto result = FilamentGroup(ctx).calc_filament_group_for_flush();
+    std::vector<int> counts(extruder_count, 0);
+    for (int filament_id = 0; filament_id < filament_count; ++filament_id) {
+        REQUIRE(result[filament_id] >= 0);
+        REQUIRE(result[filament_id] < (int) ctx.nozzle_info.nozzle_list.size());
+        const int extruder_id = ctx.nozzle_info.nozzle_list[result[filament_id]].extruder_id;
+        REQUIRE(extruder_id >= 0);
+        REQUIRE(extruder_id < extruder_count);
+        ++counts[extruder_id];
+    }
+
+    int max_other = 0;
+    for (int extruder_id = 0; extruder_id < extruder_count; ++extruder_id)
+        if (extruder_id != master)
+            max_other = std::max(max_other, counts[extruder_id]);
+    CAPTURE(counts);
+    REQUIRE(counts[master] >= max_other);
+}
+
+TEST_CASE("Volume constraints inspect every hotend on an extruder", "[filament_group][topology]")
+{
+    FilamentGroupContext ctx{};
+    ctx.group_info.total_filament_num = 1;
+    ctx.group_info.mode = FGMode::MatchMode;
+    ctx.group_info.strategy = FGStrategy::BestCost;
+    ctx.group_info.filament_volume_map = {(int) NozzleVolumeType::nvtHybrid};
+    ctx.machine_info.master_extruder_id = 0;
+    ctx.machine_info.use_master_extruder_preference = false;
+    ctx.machine_info.max_group_size = {1, 1};
+    ctx.machine_info.prefer_non_model_filament = {false, false};
+    ctx.machine_info.machine_filament_info.resize(2);
+    ctx.model_info.unprintable_filaments.resize(2);
+    ctx.model_info.layer_filaments = {{0}};
+    ctx.model_info.unprintable_volumes[0] = {NozzleVolumeType::nvtStandard};
+
+    FilamentGroupUtils::FilamentInfo filament;
+    filament.color = FilamentGroupUtils::Color(10, 20, 30);
+    filament.type = "TPU";
+    filament.is_support = false;
+    ctx.model_info.filament_info = {filament};
+
+    ctx.nozzle_info.nozzle_list = {
+        {"0.4", NozzleVolumeType::nvtStandard, 0, 0},
+        {"0.4", NozzleVolumeType::nvtTPUHighFlow, 0, 1},
+        {"0.4", NozzleVolumeType::nvtStandard, 1, 2},
+    };
+    ctx.nozzle_info.extruder_nozzle_list[0] = {0, 1};
+    ctx.nozzle_info.extruder_nozzle_list[1] = {2};
+
+    for (int extruder_id = 0; extruder_id < 2; ++extruder_id) {
+        FilamentGroupUtils::MachineFilamentInfo machine_filament;
+        static_cast<FilamentGroupUtils::FilamentInfo&>(machine_filament) = filament;
+        machine_filament.extruder_id = extruder_id;
+        machine_filament.is_extended = false;
+        ctx.machine_info.machine_filament_info[extruder_id].push_back(machine_filament);
+    }
+
+    const auto result = FilamentGroup(ctx).calc_filament_group_for_match();
+    REQUIRE(result[0] == 0);
+}

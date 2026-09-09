@@ -101,7 +101,9 @@ bool is_filament_extruder_override_key(const std::string &opt_key)
 size_t get_extruder_index(const GCodeConfig& config, unsigned int filament_id)
 {
     if (filament_id < config.filament_map.size()) {
-        return config.filament_map.get_at(filament_id)-1;
+        const int mapped_extruder = config.filament_map.get_at(filament_id);
+        if (mapped_extruder > 0)
+            return size_t(mapped_extruder - 1);
     }
     return 0;
 }
@@ -3323,15 +3325,12 @@ void PrintConfigDef::init_fff_params()
     def->mode    = comDevelop;
     def->set_default_value(new ConfigOptionBools{false});
 
-    // defined in bits
-    // 0 means cannot support, 1 means support
-    // 0 bit: can support in left extruder
-    // 1 bit: can support in right extruder
+    // defined in bits; bit i = printable on extruder i (1 = yes). Default all bits set.
     def          = this->add("filament_printable", coInts);
     def->label   = L("Filament printable");
     def->tooltip = L("The filament is printable in extruder.");
     def->mode    = comDevelop;
-    def->set_default_value(new ConfigOptionInts{3});
+    def->set_default_value(new ConfigOptionInts{-1});
 
     // A single 32-bit int encodes the compatibility level of a filament across all extruders (up to 10).
     // Every 3 bits represent one extruder: bits [3*i, 3*i+2] -> extruder i.
@@ -6008,6 +6007,22 @@ void PrintConfigDef::init_fff_params()
     def->label = "Master extruder id";
     def->tooltip = "Default extruder id to place filament.";
     def->set_default_value(new ConfigOptionInt{ 1 });
+
+    def = this->add("use_master_extruder_preference", coBool);
+    def->label = "Use master extruder preference";
+    def->tooltip = "When enabled, grouping prefers the configured master extruder. Disable for machines without a primary extruder.";
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionBool(true));
+
+    def = this->add("multi_extruder_multi_filament", coBool);
+    def->label = L("Multi-extruder multi-filament");
+    def->tooltip = L("Enable this for printers with multiple physical extruders where each extruder may use multiple filaments. "
+                     "An extruder may contain one or more hotends/nozzles, and logical filaments may be assigned to the available "
+                     "extruders and hotends instead of being permanently bound one-to-one to an extruder. "
+                     "Keep this disabled for single-extruder multi-material printers and for conventional multi-extruder or "
+                     "tool-changing printers where filament N is permanently bound to extruder N.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
 
     def = this->add("print_extruder_id", coInts);
     // internal use only, don't need translation

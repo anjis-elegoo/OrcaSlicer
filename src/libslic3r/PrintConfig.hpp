@@ -1651,6 +1651,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionStrings,             extruder_nozzle_stats))
     ((ConfigOptionInts,                printer_extruder_id))
     ((ConfigOptionInt,                 master_extruder_id))
+    ((ConfigOptionBool,                use_master_extruder_preference))
+    ((ConfigOptionBool,                multi_extruder_multi_filament))
     ((ConfigOptionStrings,             printer_extruder_variant))
 
 

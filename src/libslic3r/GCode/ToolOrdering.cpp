@@ -82,8 +82,7 @@ bool check_filament_printable_after_group(const std::vector<unsigned int> &used_
         int printable_status = print_config->filament_printable.get_at(filament_id);
         int extruder_idx = filament_maps[filament_id];
         if (!(printable_status >> extruder_idx & 1)) {
-            std::string extruder_name = extruder_idx == 0 ? _L("left") : _L("right");
-            std::string error_msg     = _L("Grouping error: ") + filament_type + _L(" can not be placed in the ") + extruder_name + _L(" nozzle");
+            std::string error_msg = _L("Grouping error: ") + filament_type + _L(" can not be placed in extruder ") + std::to_string(extruder_idx + 1);
             throw Slic3r::RuntimeError(error_msg);
         }
     }
@@ -1468,9 +1467,11 @@ static FilamentGroupContext build_filament_group_context(
 
     std::vector<std::set<int>> ext_unprintable_filaments;
     collect_unprintable_limits(physical_unprintables, geometric_unprintables, ext_unprintable_filaments);
+    ext_unprintable_filaments.resize(extruder_nums);
 
     bool ignore_ext_filament = false;
     auto extruder_ams_counts = get_extruder_ams_count(print_config.extruder_ams_count.values);
+    extruder_ams_counts.resize(extruder_nums);
     std::vector<int> group_size = calc_max_group_size(extruder_ams_counts, ignore_ext_filament);
 
     // When a filament switcher is connected, disable the AMS capacity limit for grouping.
@@ -1487,6 +1488,7 @@ static FilamentGroupContext build_filament_group_context(
             prefer_non_model_filament[idx] = (print_config.extruder_type.values[idx] == ExtruderType::etBowden);
 
     auto machine_filament_info = build_machine_filaments(print->get_extruder_filament_info(), extruder_ams_counts, ignore_ext_filament);
+    machine_filament_info.resize(extruder_nums);
 
     std::vector<std::string>   filament_types      = print_config.filament_type.values;
     std::vector<std::string>   filament_colours    = print_config.filament_colour.values;
@@ -1523,6 +1525,7 @@ static FilamentGroupContext build_filament_group_context(
     context.machine_info.machine_filament_info    = machine_filament_info;
     context.machine_info.max_group_size           = std::move(group_size);
     context.machine_info.master_extruder_id       = print_config.master_extruder_id.value - 1;
+    context.machine_info.use_master_extruder_preference = print_config.use_master_extruder_preference.value;
     context.machine_info.prefer_non_model_filament = prefer_non_model_filament;
 
     context.group_info.total_filament_num  = (int)(filament_nums);
@@ -1568,9 +1571,15 @@ static FilamentGroupContext build_filament_group_context(
             }
         }
         for (auto fil_id : used_filaments) {
-            if (ext_unprintable_filaments_with_volume[0].count(fil_id) && ext_unprintable_filaments_with_volume[1].count(fil_id)) {
-                ext_unprintable_filaments_with_volume[0].erase(fil_id);
-                ext_unprintable_filaments_with_volume[1].erase(fil_id);
+            if (ext_unprintable_filaments_with_volume.size() < 2)
+                break;
+            const bool all_forbidden = std::all_of(
+                ext_unprintable_filaments_with_volume.begin(),
+                ext_unprintable_filaments_with_volume.end(),
+                [fil_id](const std::set<int>& s) { return s.count(fil_id) > 0; });
+            if (all_forbidden) {
+                for (auto& unprintables : ext_unprintable_filaments_with_volume)
+                    unprintables.erase(fil_id);
             }
         }
         context.model_info.unprintable_filaments = ext_unprintable_filaments_with_volume;
@@ -1579,35 +1588,34 @@ static FilamentGroupContext build_filament_group_context(
     return context;
 }
 
-// Orca: restore the master-extruder preference. Orca historically ran
-// optimize_group_for_master_extruder / can_swap_groups after grouping so a light-filament print stays
-// on the primary/master extruder. A weak in-enum penalty alone cannot overcome a pre-existing
-// non-zero right-extruder self-flush term in the flush matrix (which otherwise pulls a lone filament
-// onto the non-master extruder and changes H2D/H2C g-code). We re-apply the preference ONLY in this
-// slicing wrapper — never in the FilamentGroup engine or the test harness — so existing prints keep
-// their extruder assignment while the new engine's genuine multi-filament grouping deltas still land.
+// Restore master-extruder preference after grouping so a light-filament print stays on the
+// primary extruder. A weak in-enum penalty cannot overcome a non-zero self-flush term on a
+// non-master extruder in the flush matrix (which otherwise pulls a lone filament off the master
+// and changes H2D/H2C g-code). Applied only in this slicing wrapper, not in the FilamentGroup
+// engine or the test harness.
 static bool can_swap_extruder_groups(int extruder_id_0, const std::set<int>& group_0, int extruder_id_1, const std::set<int>& group_1, const FilamentGroupContext& ctx)
 {
-    using namespace FilamentGroupUtils;
-    std::vector<std::set<int>> extruder_unprintables(2);
-    {
-        std::vector<std::set<int>> unprintable_filaments = ctx.model_info.unprintable_filaments;
-        if (unprintable_filaments.size() > 1)
-            remove_intersection(unprintable_filaments[0], unprintable_filaments[1]);
-        std::map<int, std::vector<int>> unplaceable_limits;
-        for (int group_id : {extruder_id_0, extruder_id_1})
-            if (group_id >= 0 && group_id < (int)unprintable_filaments.size())
-                for (auto f : unprintable_filaments[group_id])
-                    unplaceable_limits[f].emplace_back(group_id);
-        for (auto& elem : unplaceable_limits) sort_remove_duplicates(elem.second);
-        for (auto& elem : unplaceable_limits)
-            for (auto& eid : elem.second) {
-                if (eid == extruder_id_0) extruder_unprintables[0].insert(elem.first);
-                if (eid == extruder_id_1) extruder_unprintables[1].insert(elem.first);
-            }
-    }
-    for (auto fid : group_0) if (extruder_unprintables[1].count(fid) > 0) return false;
-    for (auto fid : group_1) if (extruder_unprintables[0].count(fid) > 0) return false;
+    const auto& unprintable_filaments = ctx.model_info.unprintable_filaments;
+    auto banned_on = [&](int eid, int fid) {
+        return eid >= 0 && eid < (int)unprintable_filaments.size() && unprintable_filaments[eid].count(fid) > 0;
+    };
+    // Filaments banned on every extruder have nowhere to go and must not block a swap (the
+    // 2-extruder case of remove_intersection). A ban shared only by the two swap targets still
+    // forbids the swap: another extruder may be able to print that filament.
+    auto banned_everywhere = [&](int fid) {
+        if (unprintable_filaments.empty())
+            return false;
+        for (const auto& s : unprintable_filaments)
+            if (s.count(fid) == 0)
+                return false;
+        return true;
+    };
+    for (auto fid : group_0)
+        if (banned_on(extruder_id_1, fid) && !banned_everywhere(fid))
+            return false;
+    for (auto fid : group_1)
+        if (banned_on(extruder_id_0, fid) && !banned_everywhere(fid))
+            return false;
     const auto& mgs = ctx.machine_info.max_group_size;
     if (extruder_id_0 < (int)mgs.size() && extruder_id_1 < (int)mgs.size() &&
         mgs[extruder_id_0] >= (int)group_0.size() && mgs[extruder_id_1] >= (int)group_1.size() &&
@@ -1616,37 +1624,80 @@ static bool can_swap_extruder_groups(int extruder_id_0, const std::set<int>& gro
     return true;
 }
 
-// Balance a filament->nozzle map toward the master extruder (2-extruder machines only). If the
-// non-master extruder holds strictly more used filaments than the master and the swap is valid, move
-// each group's filaments onto nozzles of the opposite extruder. The exact nozzle within an extruder
-// does not affect static g-code (which emits H-1), so re-nozzling round-robin is byte-safe.
+// Balance a filament->nozzle map toward the master extruder. If a non-master extruder holds
+// strictly more used filaments than the master and the swap is valid, swap the two groups onto
+// each other's nozzles. Round-robin within an extruder is only safe when those nozzles share
+// diameter and volume type; mixed hotends skip the swap rather than pick per-filament.
 static std::vector<int> apply_master_extruder_preference(const FilamentGroupContext& ctx, const std::vector<unsigned int>& used_filaments, std::vector<int> nozzle_ret)
 {
+    if (!ctx.machine_info.use_master_extruder_preference)
+        return nozzle_ret;
     const auto& extruder_nozzle_list = ctx.nozzle_info.extruder_nozzle_list;
     int master = ctx.machine_info.master_extruder_id;
-    if (extruder_nozzle_list.size() != 2 || master < 0 || master > 1) return nozzle_ret;
-    int other = 1 - master;
-    if (extruder_nozzle_list.count(master) == 0 || extruder_nozzle_list.count(other) == 0) return nozzle_ret;
+    if (extruder_nozzle_list.size() < 2 || master < 0 || extruder_nozzle_list.count(master) == 0)
+        return nozzle_ret;
     auto ext_of_nozzle = [&](int nid) -> int {
         return (nid >= 0 && nid < (int)ctx.nozzle_info.nozzle_list.size()) ? ctx.nozzle_info.nozzle_list[nid].extruder_id : -1;
     };
-    std::set<int> group_master, group_other;
+    std::map<int, std::set<int>> groups_by_extruder;
     for (auto fu : used_filaments) {
         int f = (int)fu;
         if (f >= (int)nozzle_ret.size()) continue;
         int e = ext_of_nozzle(nozzle_ret[f]);
-        if (e == master) group_master.insert(f);
-        else if (e == other) group_other.insert(f);
+        if (e >= 0)
+            groups_by_extruder[e].insert(f);
     }
-    if (group_other.size() > group_master.size() &&
-        can_swap_extruder_groups(other, group_other, master, group_master, ctx)) {
-        const auto& master_nozzles = extruder_nozzle_list.at(master);
-        const auto& other_nozzles  = extruder_nozzle_list.at(other);
-        if (!master_nozzles.empty() && !other_nozzles.empty()) {
-            int mi = 0, oi = 0;
-            for (auto f : group_other)  nozzle_ret[f] = master_nozzles[(mi++) % master_nozzles.size()];
-            for (auto f : group_master) nozzle_ret[f] = other_nozzles[(oi++) % other_nozzles.size()];
+    const std::set<int>& group_master = groups_by_extruder[master];
+    int other = -1;
+    size_t other_count = 0;
+    for (const auto& [eid, group] : groups_by_extruder) {
+        if (eid == master)
+            continue;
+        if (group.size() > other_count) {
+            other = eid;
+            other_count = group.size();
         }
+    }
+    if (other < 0 || extruder_nozzle_list.count(other) == 0)
+        return nozzle_ret;
+    const std::set<int>& group_other = groups_by_extruder[other];
+    auto nozzles_equivalent = [&](const std::vector<int>& nids) {
+        int first = -1;
+        for (int nid : nids) {
+            if (nid < 0 || nid >= (int)ctx.nozzle_info.nozzle_list.size())
+                return false;
+            if (first < 0) {
+                first = nid;
+                continue;
+            }
+            const auto& a = ctx.nozzle_info.nozzle_list[first];
+            const auto& b = ctx.nozzle_info.nozzle_list[nid];
+            if (a.volume_type != b.volume_type || a.diameter != b.diameter)
+                return false;
+        }
+        return first >= 0;
+    };
+    const auto& master_nozzles = extruder_nozzle_list.at(master);
+    const auto& other_nozzles  = extruder_nozzle_list.at(other);
+    if (group_other.size() > group_master.size() &&
+        can_swap_extruder_groups(other, group_other, master, group_master, ctx) &&
+        nozzles_equivalent(master_nozzles) && nozzles_equivalent(other_nozzles)) {
+        // Each destination has equivalent nozzles; check its volume type before moving either group.
+        for (auto f : group_other) {
+            const auto it = ctx.model_info.unprintable_volumes.find(f);
+            if (it != ctx.model_info.unprintable_volumes.end() &&
+                it->second.count(ctx.nozzle_info.nozzle_list[master_nozzles.front()].volume_type) > 0)
+                return nozzle_ret;
+        }
+        for (auto f : group_master) {
+            const auto it = ctx.model_info.unprintable_volumes.find(f);
+            if (it != ctx.model_info.unprintable_volumes.end() &&
+                it->second.count(ctx.nozzle_info.nozzle_list[other_nozzles.front()].volume_type) > 0)
+                return nozzle_ret;
+        }
+        int mi = 0, oi = 0;
+        for (auto f : group_other)  nozzle_ret[f] = master_nozzles[(mi++) % master_nozzles.size()];
+        for (auto f : group_master) nozzle_ret[f] = other_nozzles[(oi++) % other_nozzles.size()];
     }
     return nozzle_ret;
 }
@@ -1704,8 +1755,8 @@ MultiNozzleUtils::LayeredNozzleGroupResult ToolOrdering::get_recommended_filamen
     int              master_extruder_id = print_config.master_extruder_id.value - 1;
     std::vector<int> ret(filament_nums, master_extruder_id);
 
-    // Non-BBL multi-extruder printers do not support filament grouping: filament id == extruder id.
-    if (has_multiple_extruder && !print->is_BBL_printer()) {
+    // Multi-extruder printers without filament grouping: filament id == extruder id.
+    if (has_multiple_extruder && !print->is_BBL_printer() && !print_config.multi_extruder_multi_filament.value) {
         for (size_t i = 0; i < filament_nums && i < extruder_nums; i++)
             ret[i] = (int)i;
         auto result_opt = LayeredNozzleGroupResult::create(ret, nozzle_list, used_filaments);
@@ -1736,9 +1787,10 @@ MultiNozzleUtils::LayeredNozzleGroupResult ToolOrdering::get_recommended_filamen
         } else if (has_multiple_nozzle && mode == FilamentMapMode::fmmAutoForMatch) {
             ret = calc_filament_group_for_match_multi_nozzle(context);
         } else {
-            // TPU: keep the dedicated TPU split for single-nozzle-per-extruder printers.
+            // TPU split is the original 2-extruder, one-nozzle-per-extruder heuristic (TPU on
+            // master, the rest on the other). N>2 goes through FilamentGroup.
             auto tpu_filaments = get_filament_by_type(used_filaments, &print_config, "TPU");
-            if (!has_multiple_nozzle && !tpu_filaments.empty()) {
+            if (context.machine_info.use_master_extruder_preference && extruder_nums == 2 && !has_multiple_nozzle && !tpu_filaments.empty()) {
                 ret = std::vector<int>(context.group_info.total_filament_num, context.machine_info.master_extruder_id);
                 for (size_t fidx = 0; fidx < (size_t)context.group_info.total_filament_num; ++fidx)
                     ret[fidx] = tpu_filaments.count((int)fidx) ? context.machine_info.master_extruder_id : (1 - context.machine_info.master_extruder_id);
@@ -2742,6 +2794,8 @@ void ToolOrdering::reorder_extruders_for_minimum_flush_volume(bool reorder_first
     if (!print_config || m_layer_tools.empty())
         return;
 
+    const bool grouping_enabled = m_print && (m_print->is_BBL_printer() || print_config->multi_extruder_multi_filament.value);
+
     const unsigned int number_of_extruders = (unsigned int)(print_config->filament_colour.values.size() + EPSILON);
 
     using FlushMatrix = std::vector<std::vector<float>>;
@@ -2935,8 +2989,8 @@ void ToolOrdering::reorder_extruders_for_minimum_flush_volume(bool reorder_first
         }
         std::transform(filament_maps.begin(), filament_maps.end(), filament_maps.begin(), [](int value) { return value - 1; });
 
-        if (m_print->is_BBL_printer())
-        check_filament_printable_after_group(used_filaments, filament_maps, print_config);
+        if (grouping_enabled)
+            check_filament_printable_after_group(used_filaments, filament_maps, print_config);
     }
     else {
         // by-object: grouping was decided in Print.cpp; just wrap the (0-based) config map.
@@ -2963,7 +3017,7 @@ void ToolOrdering::reorder_extruders_for_minimum_flush_volume(bool reorder_first
     if (!dynamic_reorder) {
         reorder_filaments_for_minimum_flush_volume(
             filament_lists,
-            m_print->is_BBL_printer() ? filament_maps : maps_without_group, // non-bbl printers do not support filament group yet
+            grouping_enabled ? filament_maps : maps_without_group, // Printers with filament grouping disabled use the original filament map.
             layer_filaments,
             nozzle_flush_mtx,
             get_custom_seq,

@@ -1137,16 +1137,21 @@ namespace Slic3r
         //only when layer filament num <= 5,we do forcast
         constexpr int max_n_with_forcast = 5;
         int cost = 0;
-        std::vector<std::unordered_set<unsigned int>>groups(2); //save the grouped filaments
-        std::vector<std::vector<std::vector<unsigned int>>> layer_sequences(2); //save the reordered filament sequence by group
+        const size_t group_count = flush_matrix.size();
+        if (group_count == 0) {
+            if (filament_sequences)
+                *filament_sequences = layer_filaments;
+            return cost;
+        }
+        std::vector<std::unordered_set<unsigned int>> groups(group_count); //save the grouped filaments
+        std::vector<std::vector<std::vector<unsigned int>>> layer_sequences(group_count); //save the reordered filament sequence by group
         std::map<size_t, std::vector<unsigned int>> custom_layer_sequence_map; // save the filament sequences of custom layer
 
         // group the filament
-        for (int i = 0; i < filament_maps.size(); ++i) {
-            if (filament_maps[i] == 0)
-                groups[0].insert(filament_lists[i]);
-            if (filament_maps[i] == 1)
-                groups[1].insert(filament_lists[i]);
+        for (size_t i = 0; i < filament_maps.size() && i < filament_lists.size(); ++i) {
+            const int group_id = filament_maps[i];
+            if (group_id >= 0 && size_t(group_id) < group_count)
+                groups[group_id].insert(filament_lists[i]);
         }
 
         // store custom layer sequence
@@ -1264,14 +1269,19 @@ namespace Slic3r
             filament_sequences->clear();
             filament_sequences->resize(layer_filaments.size());
             int last_group_id = 0;
-            //if last_group == 0,print group 0 first ,else print group 1 first
             if (!custom_layer_sequence_map.empty()) {
                 const auto& first_layer = custom_layer_sequence_map.begin()->first;
                 const auto& first_layer_filaments = custom_layer_sequence_map.begin()->second;
                 assert(!first_layer_filaments.empty());
 
-                bool first_group = groups[0].count(first_layer_filaments.front()) ? 0 : 1;
-                last_group_id = (first_layer & 1) ? !first_group : first_group;
+                auto group_for_filament = [&groups](unsigned int filament_id) {
+                    for (size_t group_id = 0; group_id < groups.size(); ++group_id)
+                        if (groups[group_id].count(filament_id))
+                            return int(group_id);
+                    return 0;
+                };
+                const int first_group = group_for_filament(first_layer_filaments.front());
+                last_group_id = group_count == 2 && (first_layer & 1) ? 1 - first_group : first_group;
             }
 
             for (size_t layer = 0; layer < layer_filaments.size(); ++layer) {
@@ -1279,26 +1289,21 @@ namespace Slic3r
                 if (custom_layer_sequence_map.find(layer) != custom_layer_sequence_map.end()) {
                     curr_layer_seq = custom_layer_sequence_map[layer];
                     if (!curr_layer_seq.empty()) {
-                        last_group_id = groups[0].count(curr_layer_seq.back()) ? 0 : 1;
+                        for (size_t group_id = 0; group_id < groups.size(); ++group_id)
+                            if (groups[group_id].count(curr_layer_seq.back())) {
+                                last_group_id = int(group_id);
+                                break;
+                            }
                     }
                     continue;
                 }
-                if (last_group_id == 1) {
-                    // try reuse the last group
-                    if (!layer_sequences[1].empty() && !layer_sequences[1][layer].empty())
-                        curr_layer_seq.insert(curr_layer_seq.end(), layer_sequences[1][layer].begin(), layer_sequences[1][layer].end());
-                    if (!layer_sequences[0].empty() && !layer_sequences[0][layer].empty()) {
-                        curr_layer_seq.insert(curr_layer_seq.end(), layer_sequences[0][layer].begin(), layer_sequences[0][layer].end());
-                        last_group_id = 0; // update last group id
-                    }
-                }
-                else if(last_group_id == 0) {
-                    if (!layer_sequences[0].empty() && !layer_sequences[0][layer].empty()) {
-                        curr_layer_seq.insert(curr_layer_seq.end(), layer_sequences[0][layer].begin(), layer_sequences[0][layer].end());
-                    }
-                    if (!layer_sequences[1].empty() && !layer_sequences[1][layer].empty()) {
-                        curr_layer_seq.insert(curr_layer_seq.end(), layer_sequences[1][layer].begin(), layer_sequences[1][layer].end());
-                        last_group_id = 1; // update last group id
+                // Start with the group used last, then visit the others in order.
+                const size_t start_group_id = size_t(last_group_id);
+                for (size_t offset = 0; offset < group_count; ++offset) {
+                    const size_t group_id = (start_group_id + offset) % group_count;
+                    if (!layer_sequences[group_id].empty() && !layer_sequences[group_id][layer].empty()) {
+                        curr_layer_seq.insert(curr_layer_seq.end(), layer_sequences[group_id][layer].begin(), layer_sequences[group_id][layer].end());
+                        last_group_id = int(group_id);
                     }
                 }
             }

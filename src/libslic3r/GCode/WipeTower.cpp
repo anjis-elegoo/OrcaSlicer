@@ -2001,7 +2001,11 @@ void WipeTower::set_extruder(size_t idx, const PrintConfig& config)
 #endif
 
     m_filpar[idx].filament_area = float((M_PI/4.f) * pow(config.filament_diameter.get_at(idx), 2)); // all extruders are assumed to have the same filament diameter at this point
-    float nozzle_diameter = float(config.nozzle_diameter.get_at(idx));
+    // idx is a logical filament id.
+    const size_t physical_extruder_id = std::min(
+        get_extruder_index(config, unsigned(idx)),
+        config.nozzle_diameter.size() - 1);
+    float nozzle_diameter = float(config.nozzle_diameter.get_at(physical_extruder_id));
     m_filpar[idx].nozzle_diameter = nozzle_diameter; // to be used in future with (non-single) multiextruder MM
 
     float max_vol_speed = float(config.filament_max_volumetric_speed.get_at(idx));
