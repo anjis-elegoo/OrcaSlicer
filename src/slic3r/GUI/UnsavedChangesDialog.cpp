@@ -1569,13 +1569,23 @@ void UnsavedChangesDialog::update_tree(Preset::Type type, PresetCollection* pres
             if (variant_index >= 0) {
                 if (printer_options_with_variant_2.count(opt_key.substr(0, opt_key.find_last_of('#'))) > 0)
                     variant_index /= 2;
-                if (boost::nowide::narrow(category).find("Extruder ") == 0)
-                    category = category.substr(0, 8);
-                if (extruder_id)
-                    category = category + (wxString(" {") + (extruder_id->values[variant_index] == 1 ? _L("Left: ") : _L("Right: "))
-                            + L(extruder_variant->values[variant_index]) + "}");
-                else
-                    category = category + (wxString(" {") + L(extruder_variant->values[variant_index]) + "}");
+                const bool has_id = extruder_id && variant_index < (int)extruder_id->values.size();
+                const bool has_variant = extruder_variant && variant_index < (int)extruder_variant->values.size();
+                const wxString variant_name = has_variant ? L(extruder_variant->values[variant_index]) : wxString();
+                if (has_id) {
+                    const int eid = extruder_id->values[variant_index];
+                    if (wxGetApp().preset_bundle->is_bbl_vendor()) {
+                        if (boost::nowide::narrow(category).find("Extruder ") == 0)
+                            category = category.substr(0, 8);
+                        category += wxString(" {") + (eid == 1 ? _L("Left: ") : _L("Right: ")) + variant_name + "}";
+                    } else {
+                        category = wxString::Format(_L("Extruder %d"), eid);
+                        if (!variant_name.empty())
+                            category += wxString(" {") + variant_name + "}";
+                    }
+                } else if (has_variant) {
+                    category += wxString(" {") + variant_name + "}";
+                }
             }
 
             /*m_tree->Append(opt_key, type, option.category_local, option.group_local, option.label_local,
