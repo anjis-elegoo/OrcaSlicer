@@ -5537,6 +5537,16 @@ if (is_marlin_flavor)
             if (v.empty()) return;
             size_t extruders_count = size_t(boost::any_cast<int>(v));
             wxTheApp->CallAfter([this, opt_key, value, extruders_count]() {
+                if ((opt_key == "single_extruder_multi_material" || opt_key == "multi_extruder_multi_filament") &&
+                    boost::any_cast<bool>(value)) {
+                    const char *other_mode = opt_key == "single_extruder_multi_material" ?
+                        "multi_extruder_multi_filament" : "single_extruder_multi_material";
+                    if (m_config->opt_bool(other_mode)) {
+                        DynamicPrintConfig new_conf = *m_config;
+                        new_conf.set_key_value(other_mode, new ConfigOptionBool(false));
+                        load_config(new_conf);
+                    }
+                }
                 const size_t old_flush_extruder_count =
                     m_preset_bundle->project_config.option<ConfigOptionFloats>("flush_multiplier")->values.size();
                 if (opt_key == "extruders_count" || opt_key == "single_extruder_multi_material") {
@@ -6108,6 +6118,8 @@ void TabPrinter::toggle_options()
             toggle_option(el, supports_wipe_tower_2);
 
         auto bSEMM = m_config->opt_bool("single_extruder_multi_material");
+        toggle_option("single_extruder_multi_material", !is_BBL_printer && !m_config->opt_bool("multi_extruder_multi_filament"));
+        toggle_option("multi_extruder_multi_filament", !is_BBL_printer && !bSEMM);
         if (!bSEMM && m_config->opt_bool("manual_filament_change")) {
             DynamicPrintConfig new_conf = *m_config;
             new_conf.set_key_value("manual_filament_change", new ConfigOptionBool(false));

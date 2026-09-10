@@ -4477,7 +4477,8 @@ int PresetBundle::get_printer_extruder_count() const
 
 void PresetBundle::update_filament_count()
 {
-    if (printers.get_edited_preset().printer_technology() != ptFFF)
+    if (printers.get_edited_preset().printer_technology() != ptFFF ||
+        printers.get_edited_preset().config.opt_bool("multi_extruder_multi_filament"))
         return;
     const size_t num_extruders = static_cast<size_t>(get_printer_extruder_count());
     if (filament_presets.size() >= num_extruders)
@@ -7258,7 +7259,9 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
 
     auto* nozzle_diameter = static_cast<const ConfigOptionFloats*>(printers.get_edited_preset().config.option("nozzle_diameter"));
     size_t num_extruders  = nozzle_diameter->values.size();
-    if (num_extruders > num_filaments) { // Verify validity of the current filament presets.
+    // Logical filament count is independent of the physical extruder count in this mode.
+    if (num_extruders > num_filaments &&
+        !printers.get_edited_preset().config.opt_bool("multi_extruder_multi_filament")) {
         for (size_t i = 0; i < std::min(this->filament_presets.size(), num_extruders); ++i)
             this->filament_presets[i] = this->filaments.find_preset(this->filament_presets[i], true)->name;
         // Append the rest of filament presets.
