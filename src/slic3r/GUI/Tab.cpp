@@ -5537,6 +5537,8 @@ if (is_marlin_flavor)
             if (v.empty()) return;
             size_t extruders_count = size_t(boost::any_cast<int>(v));
             wxTheApp->CallAfter([this, opt_key, value, extruders_count]() {
+                const size_t old_flush_extruder_count =
+                    m_preset_bundle->project_config.option<ConfigOptionFloats>("flush_multiplier")->values.size();
                 if (opt_key == "extruders_count" || opt_key == "single_extruder_multi_material") {
                     extruders_count_changed(extruders_count);
                     init_options_list(); // m_options_list should be updated before UI updating
@@ -5593,6 +5595,16 @@ if (is_marlin_flavor)
                 else {
                     update_dirty();
                     on_value_change(opt_key, value);
+                }
+                // Recalculate only for user edits, not when loading a preset or project.
+                if (m_config->opt_bool("multi_extruder_multi_filament") &&
+                    wxGetApp().app_config->get("auto_calculate_flush") == "all") {
+                    if (opt_key == "multi_extruder_multi_filament" && boost::any_cast<bool>(value)) {
+                        wxGetApp().plater()->sidebar().auto_calc_flushing_volumes(-1);
+                    } else if (opt_key == "extruders_count") {
+                        for (size_t extruder_id = old_flush_extruder_count; extruder_id < m_extruders_count; ++extruder_id)
+                            wxGetApp().plater()->sidebar().auto_calc_flushing_volumes(-1, static_cast<int>(extruder_id));
+                    }
                 }
             });
         };

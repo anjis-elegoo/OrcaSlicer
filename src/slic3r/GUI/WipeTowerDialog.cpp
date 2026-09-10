@@ -527,7 +527,7 @@ WipingDialog::WipingDialog(wxWindow* parent, const int max_flush_volume) :
                 CallAfter([obj, this] {
                     std::string flush_volume_matrix_str = obj["flush_volume_matrix"].dump();
                     std::string extruder_id_str = std::to_string(obj["extruder_id"].get<int>());
-                    wxString script = wxString::Format("updateTable(%s,%s)", flush_volume_matrix_str, extruder_id_str);
+                    wxString script = "updateTable(" + wxString::FromUTF8(flush_volume_matrix_str) + "," + extruder_id_str + ")";
                     m_webview->RunScript(script);
                     });
             }
