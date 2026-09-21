@@ -4230,6 +4230,7 @@ void GCode::export_layer_filaments(GCodeProcessorResult* result)
     result->filament_change_sequence.clear();
     result->nozzle_change_sequence.clear();
 
+    const auto group_result = m_print->get_layered_nozzle_group_result();
     int prev_sequence_filament = -1;
     int prev_sequence_nozzle = -1;
     for (size_t layer_idx = 0; layer_idx < m_sorted_layer_filaments.size(); ++layer_idx) {
@@ -4237,6 +4238,12 @@ void GCode::export_layer_filaments(GCodeProcessorResult* result)
             int nozzle_id = 0;
             if (filament_id < filament_map.size() && filament_map[filament_id] > 0)
                 nozzle_id = filament_map[filament_id] - 1;
+            // filament_map identifies extruders; sequence metadata needs logical nozzle ids.
+            if (group_result) {
+                const int mapped_nozzle_id = group_result->get_nozzle_id((int) filament_id, (int) layer_idx);
+                if (mapped_nozzle_id >= 0)
+                    nozzle_id = mapped_nozzle_id;
+            }
             if (prev_sequence_nozzle != nozzle_id || prev_sequence_filament != static_cast<int>(filament_id)) {
                 result->nozzle_change_sequence.emplace_back(static_cast<unsigned int>(nozzle_id));
                 result->filament_change_sequence.emplace_back(filament_id);
