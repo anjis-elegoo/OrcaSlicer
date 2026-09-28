@@ -1233,8 +1233,10 @@ std::vector<WipeTower::ToolChangeResult> WipeTower2::prime(
 	const std::vector<unsigned int> &tools,
 	// If true, the last priming are will be the same as the other priming areas, and the rest of the wipe will be performed inside the wipe tower.
 	// If false, the last priming are will be large enough to wipe the last extruder sufficiently.
-    bool 						/*last_wipe_inside_wipe_tower*/)
+    bool 						/*last_wipe_inside_wipe_tower*/,
+    const std::vector<float>& priming_volumes)
 {
+	assert(priming_volumes.empty() || priming_volumes.size() == tools.size());
 	this->set_layer(initial_layer_print_height, initial_layer_print_height, tools.size(), true, false);
 	m_current_tool 		= tools.front();
     
@@ -1286,11 +1288,12 @@ std::vector<WipeTower::ToolChangeResult> WipeTower2::prime(
         toolchange_Load(writer, cleaning_box); // Prime the tool.
         if (idx_tool + 1 == tools.size()) {
             // Last tool should not be unloaded, but it should be wiped enough to become of a pure color.
-            toolchange_Wipe(writer, cleaning_box, wipe_volumes[tools[idx_tool-1]][tool], false, true);
+            toolchange_Wipe(writer, cleaning_box,
+                priming_volumes.empty() ? wipe_volumes[tools[idx_tool-1]][tool] : priming_volumes[idx_tool], false, true);
         } else {
             // Ram the hot material out of the melt zone, retract the filament into the cooling tubes and let it cool.
             //writer.travel(writer.x(), writer.y() + m_perimeter_width, 7200);
-            toolchange_Wipe(writer, cleaning_box , 20.f, false, true);
+            toolchange_Wipe(writer, cleaning_box, priming_volumes.empty() ? 20.f : priming_volumes[idx_tool], false, true);
             WipeTower::box_coordinates box = cleaning_box;
             box.translate(0.f, writer.y() - cleaning_box.ld.y() + m_perimeter_width);
             toolchange_Unload(writer, box , m_filpar[m_current_tool].material, m_filpar[m_current_tool].first_layer_temperature, m_filpar[tools[idx_tool + 1]].first_layer_temperature);
@@ -2186,31 +2189,33 @@ Polygon WipeTower2::cone_base_polygon(double width, double depth, double height,
 // DynamicPrintConfig directly instead of materializing a full PrintConfig per call.
 std::vector<std::vector<float>> WipeTower2::extract_wipe_volumes(const ConfigBase& config)
 {
-    // flush_volumes_matrix holds one filaments x filaments block per nozzle (written by
+    // flush_volumes_matrix holds one filaments x filaments block per extruder (written by
     // PresetBundle::update_multi_material_filament_presets), so the filament count is
-    // sqrt(size / nozzles). One tower serves every nozzle and the filament to nozzle assignment is
-    // only decided later by ToolOrdering, so fold the blocks with std::max: the depth reserved here
-    // has to cover the worst nozzle. With a single nozzle the fold has one term.
+    // sqrt(size / extruder_count). The assignment is not known for this estimate, so use the
+    // maximum scaled volume across extruders for each filament pair to reserve tower space.
     const std::vector<double> &raw_matrix      = config.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
     const auto                *nozzle_diameter = config.option<ConfigOptionFloats>("nozzle_diameter");
     size_t       nozzle_nums         = (nozzle_diameter == nullptr || nozzle_diameter->values.empty()) ? 1 : nozzle_diameter->values.size();
     unsigned int number_of_extruders = (unsigned int)(sqrt(raw_matrix.size() / nozzle_nums) + EPSILON);
     if (size_t(number_of_extruders) * number_of_extruders * nozzle_nums != raw_matrix.size()) {
-        // Saved for a different nozzle count (older project, or the printer was just switched):
+        // Saved for a different extruder count (older project, or the printer was just switched):
         // fall back to reading the whole option as one block, as this did before.
         nozzle_nums         = 1;
         number_of_extruders = (unsigned int)(sqrt(raw_matrix.size()) + EPSILON);
     }
 
-    // The values shall only be used when SEMM is enabled. The purging for other printers
-    // is determined by filament_minimal_purge_on_wipe_tower.
+    // Both multi-material modes can change filament within a hotend and need matrix-based tower purging.
+    const auto *multi_filament = config.option<ConfigOptionBool>("multi_extruder_multi_filament");
     const bool purge = config.option<ConfigOptionBool>("purge_in_prime_tower")->value
-                    && config.option<ConfigOptionBool>("single_extruder_multi_material")->value;
+                    && (config.option<ConfigOptionBool>("single_extruder_multi_material")->value ||
+                        (multi_filament && multi_filament->value));
 
-    // Extract purging volumes for each extruder pair, each nozzle's block scaled by its own multiplier:
+    // Scale each extruder's block before taking the maximum for each filament pair.
     std::vector<std::vector<float>> wipe_volumes(number_of_extruders, std::vector<float>(number_of_extruders, 0.f));
     if (purge) {
-        const auto *multiplier = config.option<ConfigOptionFloats>("flush_multiplier");
+        const bool fast_purge = multi_filament && multi_filament->value &&
+            config.option<ConfigOptionEnum<PrimeVolumeMode>>("prime_volume_mode")->value == PrimeVolumeMode::pvmFast;
+        const auto *multiplier = config.option<ConfigOptionFloats>(fast_purge ? "flush_multiplier_fast" : "flush_multiplier");
         for (size_t nozzle_id = 0; nozzle_id < nozzle_nums; ++nozzle_id) {
             const std::vector<double> block = get_flush_volumes_matrix(raw_matrix, nozzle_id, nozzle_nums);
             const double              scale = multiplier->get_at(nozzle_id);
