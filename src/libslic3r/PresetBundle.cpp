@@ -4649,7 +4649,8 @@ int PresetBundle::get_printer_extruder_count() const
 
 void PresetBundle::update_filament_count()
 {
-    if (printers.get_edited_preset().printer_technology() != ptFFF)
+    if (printers.get_edited_preset().printer_technology() != ptFFF ||
+        printers.get_edited_preset().config.opt_bool("multi_extruder_multi_filament"))
         return;
     const size_t num_extruders = static_cast<size_t>(get_printer_extruder_count());
     if (filament_presets.size() >= num_extruders)
@@ -5749,17 +5750,18 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
             // Grow the receiver's slots only as far as the highest published slot (never
             // shrink, never pull filler materials for unpublished slots).
             bool has_published_entries = false;
-            // Physical filament capacity of the receiver's printer: a non-SEMM tool-changer
-            // feeds filament N from nozzle N, so the nozzle count is the hard limit; a SEMM
-            // printer (single_extruder_multi_material) sizes its slot list by hand, so only
-            // the global slot limit applies (same condition as GUI_App::load_current_presets).
+            // Physical filament capacity of the receiver's printer: a conventional tool-changer
+            // feeds filament N from nozzle N, so the nozzle count is the hard limit; a multi-material
+            // printer sizes its slot list by hand, so only the global slot limit applies
+            // (same condition as GUI_App::load_current_presets).
             // Published entries that would need a NEW physical slot past this capacity are
             // appended as empty mixed-filament placeholders instead of growing the list.
             size_t physical_capacity = size_t(EnforcerBlockerType::ExtruderMax);
             {
                 const Preset& receiver_printer = this->printers.get_edited_preset();
                 if (receiver_printer.printer_technology() == ptFFF &&
-                    !receiver_printer.config.opt_bool("single_extruder_multi_material")) {
+                    !receiver_printer.config.opt_bool("single_extruder_multi_material") &&
+                    !receiver_printer.config.opt_bool("multi_extruder_multi_filament")) {
                     if (const auto* nozzle_diameter = receiver_printer.config.option<ConfigOptionFloats>("nozzle_diameter");
                         nozzle_diameter != nullptr && !nozzle_diameter->values.empty())
                         physical_capacity = nozzle_diameter->values.size();
@@ -7590,7 +7592,9 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
 
     auto* nozzle_diameter = static_cast<const ConfigOptionFloats*>(printers.get_edited_preset().config.option("nozzle_diameter"));
     size_t num_extruders  = nozzle_diameter->values.size();
-    if (num_extruders > num_filaments) { // Verify validity of the current filament presets.
+    // Logical filament count is independent of the physical extruder count in this mode.
+    if (num_extruders > num_filaments &&
+        !printers.get_edited_preset().config.opt_bool("multi_extruder_multi_filament")) {
         for (size_t i = 0; i < std::min(this->filament_presets.size(), num_extruders); ++i)
             this->filament_presets[i] = this->filaments.find_preset(this->filament_presets[i], true)->name;
         // Append the rest of filament presets.

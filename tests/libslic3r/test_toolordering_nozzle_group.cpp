@@ -287,6 +287,35 @@ TEST_CASE("H2C dynamic selector: per-layer nozzle ids reach the g-code surface",
     REQUIRE(fil2_nozzles == std::set<int>({2, 3}));
 }
 
+TEST_CASE("Nozzle ordering preserves the active extruder across gaps in extruder IDs", "[ToolOrdering]")
+{
+    const int initial_extruder = GENERATE(-1, 0, 2);
+    const bool custom_first_layer = GENERATE(false, true);
+    auto nozzles = single_nozzle_per_extruder(2);
+    nozzles[1].extruder_id = 2;
+    const auto grouping = LayeredNozzleGroupResult::create({0, 1}, nozzles, {0, 1});
+    REQUIRE(grouping.has_value());
+    const std::vector<std::vector<unsigned int>> layers{{0, 1}, {0, 1}, {0, 1}};
+    const std::vector<FlushMatrix> matrices(3, {{0.f, 40.f}, {40.f, 0.f}});
+    NozzleStatusRecorder initial_status;
+    initial_status.set_current_extruder_id(initial_extruder);
+    const auto custom_sequence = [custom_first_layer](int layer, std::vector<int>& sequence) {
+        if (!custom_first_layer || layer != 0)
+            return false;
+        sequence = {1, 2};
+        return true;
+    };
+    std::vector<std::vector<unsigned int>> sequences;
+    reorder_filaments_for_multi_nozzle_extruder({0, 1}, *grouping, layers, matrices, custom_sequence, &sequences, initial_status);
+    REQUIRE(sequences.size() == layers.size());
+    for (const auto& sequence : sequences)
+        REQUIRE(sequence.size() == 2);
+    const unsigned int expected_first = custom_first_layer || initial_extruder != 2 ? 0u : 1u;
+    CHECK(sequences[0].front() == expected_first);
+    for (size_t layer = 1; layer < sequences.size(); ++layer)
+        CHECK(sequences[layer].front() == sequences[layer - 1].back());
+}
+
 TEST_CASE("Multi-nozzle reorder tolerates a filament with no nozzle (RL-48)", "[ToolOrdering][H2C][Dynamic]")
 {
     // The per-layer engine can hand reorder_filaments_for_multi_nozzle_extruder a group result that
@@ -452,6 +481,76 @@ TEST_CASE("update_used_filament_values merges only used filaments", "[ToolOrderi
 
     // No used filaments => the config baseline is returned untouched.
     REQUIRE(FilamentGroupUtils::update_used_filament_values(old_values, new_values, {}) == old_values);
+}
+
+TEST_CASE("collect_unprintable_limits keeps per-extruder bans for N extruders", "[FilamentGroup]")
+{
+    std::vector<std::set<int>> physical = {{0}, {1}, {0, 2}};
+    std::vector<std::set<int>> geometric = {{}, {2}, {}};
+    std::vector<std::set<int>> limits;
+    bool ok = FilamentGroupUtils::collect_unprintable_limits(physical, geometric, limits);
+    REQUIRE(ok);
+    REQUIRE(limits.size() == 3);
+    REQUIRE(limits[0] == std::set<int>{0});
+    REQUIRE(limits[1] == std::set<int>{1, 2});
+    REQUIRE(limits[2] == std::set<int>{0, 2});
+
+    // Forbidden on every extruder is dropped and reported as a conflict.
+    physical = {{3}, {3}, {3}};
+    geometric = {{}, {}, {}};
+    ok = FilamentGroupUtils::collect_unprintable_limits(physical, geometric, limits);
+    REQUIRE_FALSE(ok);
+    REQUIRE(limits[0].count(3) == 0);
+    REQUIRE(limits[1].count(3) == 0);
+    REQUIRE(limits[2].count(3) == 0);
+}
+
+TEST_CASE("Conflicting constraint types preserve physical bans", "[FilamentGroup][Regression]")
+{
+    for (size_t extruder_count : {2u, 3u, 4u}) {
+        CAPTURE(extruder_count);
+        std::vector<std::set<int>> physical(extruder_count, {0});
+        physical.back().clear();
+        std::vector<std::set<int>> geometric(extruder_count);
+        geometric.back().insert(0);
+        std::vector<std::set<int>> limits;
+
+        REQUIRE_FALSE(FilamentGroupUtils::collect_unprintable_limits(physical, geometric, limits));
+        REQUIRE(limits == physical);
+    }
+}
+
+TEST_CASE("All-extruder bans are cleared separately before merging constraint types", "[FilamentGroup][Regression]")
+{
+    for (size_t extruder_count : {2u, 3u, 4u}) {
+        CAPTURE(extruder_count);
+        std::vector<std::set<int>> all_banned(extruder_count, {0});
+        std::vector<std::set<int>> partial_bans(extruder_count);
+        partial_bans.back().insert(0);
+        std::vector<std::set<int>> limits;
+
+        REQUIRE_FALSE(FilamentGroupUtils::collect_unprintable_limits(all_banned, partial_bans, limits));
+        REQUIRE(limits == partial_bans);
+        REQUIRE_FALSE(FilamentGroupUtils::collect_unprintable_limits(partial_bans, all_banned, limits));
+        REQUIRE(limits == partial_bans);
+    }
+}
+
+TEST_CASE("Minimum-flush reorder preserves filaments assigned to every physical extruder", "[ToolOrdering][NExtruder]")
+{
+    std::vector<unsigned int> filament_list = {0, 1, 2, 3};
+    std::vector<int> filament_map = {0, 1, 2, 3};
+    std::vector<std::vector<unsigned int>> layer_filaments = {{0, 1, 2, 3}};
+    std::vector<std::vector<std::vector<float>>> flush_matrices(
+        4, std::vector<std::vector<float>>(4, std::vector<float>(4, 0.f)));
+    std::vector<std::vector<unsigned int>> sequences;
+
+    REQUIRE_NOTHROW(reorder_filaments_for_minimum_flush_volume(
+        filament_list, filament_map, layer_filaments, flush_matrices, std::nullopt, &sequences));
+    REQUIRE(sequences.size() == 1);
+    REQUIRE(sequences.front().size() == 4);
+    REQUIRE(std::set<unsigned int>(sequences.front().begin(), sequences.front().end())
+            == std::set<unsigned int>({0, 1, 2, 3}));
 }
 
 TEST_CASE("Print config-index resolvers pick per-filament Hybrid slots", "[Print][H2C]")
