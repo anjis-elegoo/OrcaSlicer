@@ -5414,7 +5414,8 @@ int PresetBundle::get_printer_extruder_count() const
 
 size_t PresetBundle::min_filament_count() const
 {
-    if (printers.get_edited_preset().config.opt_bool("single_extruder_multi_material"))
+    if (printers.get_edited_preset().config.opt_bool("single_extruder_multi_material") ||
+        printers.get_edited_preset().config.opt_bool("multi_extruder_multi_filament"))
         return 1;
     return static_cast<size_t>(get_printer_extruder_count());
 }
@@ -6613,17 +6614,18 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
             // Grow the receiver's slots only as far as the highest published slot (never
             // shrink, never pull filler materials for unpublished slots).
             bool has_published_entries = false;
-            // Physical filament capacity of the receiver's printer: a non-SEMM tool-changer
-            // feeds filament N from nozzle N, so the nozzle count is the hard limit; a SEMM
-            // printer (single_extruder_multi_material) sizes its slot list by hand, so only
-            // the global slot limit applies (same condition as GUI_App::load_current_presets).
+            // Physical filament capacity of the receiver's printer: a conventional tool-changer
+            // feeds filament N from nozzle N, so the nozzle count is the hard limit; a multi-material
+            // printer sizes its slot list by hand, so only the global slot limit applies
+            // (same condition as GUI_App::load_current_presets).
             // Published entries that would need a NEW physical slot past this capacity are
             // appended as empty mixed-filament placeholders instead of growing the list.
             size_t physical_capacity = size_t(EnforcerBlockerType::ExtruderMax);
             {
                 const Preset& receiver_printer = this->printers.get_edited_preset();
                 if (receiver_printer.printer_technology() == ptFFF &&
-                    !receiver_printer.config.opt_bool("single_extruder_multi_material")) {
+                    !receiver_printer.config.opt_bool("single_extruder_multi_material") &&
+                    !receiver_printer.config.opt_bool("multi_extruder_multi_filament")) {
                     if (const auto* nozzle_diameter = receiver_printer.config.option<ConfigOptionFloats>("nozzle_diameter");
                         nozzle_diameter != nullptr && !nozzle_diameter->values.empty())
                         physical_capacity = nozzle_diameter->values.size();

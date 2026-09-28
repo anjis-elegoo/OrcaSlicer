@@ -86,7 +86,7 @@ struct FilamentBaseInfo
     int temperature_vitrification = INT_MAX;
     bool is_support{ false };
     bool is_system{ true };
-    int  filament_printable = 3;
+    int  filament_printable = -1;
 
     // filament_extruder_compatibility packs one compatibility level per extruder into a single
     // 32-bit int, 3 bits per extruder (up to 10 extruders). Levels: 0 = printable, 1 = error,
@@ -739,8 +739,8 @@ public:
 private:
     // Orca: The fewest filaments the selected FFF printer runs with. A tool changer carries one
     // filament per tool, so it needs one per nozzle. A printer feeding filaments through shared
-    // nozzles (single_extruder_multi_material, e.g. a Bambu Lab H2D) maps any number of them onto
-    // its nozzles, so one is enough, and the user may delete down to it.
+    // nozzles (single_extruder_multi_material or multi_extruder_multi_filament) maps any number
+    // of them onto its nozzles, so one is enough, and the user may delete down to it.
     size_t min_filament_count() const;
 
     // Move the presets and vendor profiles of `others` into this bundle, in one pass

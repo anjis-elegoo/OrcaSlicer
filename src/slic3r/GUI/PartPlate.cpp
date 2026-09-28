@@ -3480,12 +3480,13 @@ std::vector<int> PartPlate::get_effective_exclusion_filament_maps(
     const std::vector<int> configured_map = get_real_filament_maps(g_config);
     const FilamentMapMode map_mode = get_real_filament_map_mode(g_config);
     PresetBundle *preset_bundle = wxGetApp().preset_bundle;
-    const bool is_bambu = preset_bundle != nullptr && preset_bundle->is_bbl_vendor();
+    const bool grouping_enabled = preset_bundle != nullptr &&
+        (preset_bundle->is_bbl_vendor() || preset_bundle->printers.get_edited_preset().config.opt_bool("multi_extruder_multi_filament"));
     const bool automatic = is_auto_filament_map_mode(map_mode);
     const bool automatic_map_resolved = !automatic || !get_filament_maps().empty();
     for (size_t filament_id = 0; filament_id < filament_count; ++filament_id) {
         const int extruder_id = bed_exclusion_extruder_for_filament(
-            filament_id, configured_map, map_mode, is_bambu, automatic_map_resolved, extruder_count);
+            filament_id, configured_map, map_mode, grouping_enabled, automatic_map_resolved, extruder_count);
         if (extruder_id >= 0)
             result[filament_id] = extruder_id + 1;
     }
