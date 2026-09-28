@@ -354,7 +354,7 @@ wxString WipingDialog::BuildTableObjStr()
         auto fm = get_flush_volumes_matrix(raw_matrix_data, idx, nozzle_num);
         flush_matrixs.emplace_back(extract_physical_sub_matrix(fm, full_n, m_physical_indices));
     }
-    flush_multiplier.resize(nozzle_num, 1);
+    flush_multiplier.resize(nozzle_num, FullPrintConfig::defaults().flush_multiplier.get_at(0));
 
     std::vector<std::vector<float>> default_matrixs;
     for (int idx = 0; idx < nozzle_num; ++idx) {
