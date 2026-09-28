@@ -116,12 +116,12 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
     if (nozzle_diameters->size() <= 1)
         return true;
 
-    // The filament-grouping dialog is specifically designed for BBL dual-nozzle printers
-    // (e.g. H2D) where filaments must be assigned to a left or right nozzle.
-    // For toolchangers (≥3 tools) and all non-BBL printers the dialog is irrelevant and
-    // confusing; skip it entirely so slicing proceeds without interruption. (#12390)
     PresetBundle* preset = wxGetApp().preset_bundle;
-    if (!preset || !preset->is_bbl_vendor() || nozzle_diameters->size() != 2)
+    if (!preset)
+        return true;
+    if (preset->is_bbl_vendor() && nozzle_diameters->size() != 2)
+        return true;
+    if (!preset->is_bbl_vendor() && !full_config.opt_bool("multi_extruder_multi_filament"))
         return true;
 
     bool sync_plate = true;
@@ -191,7 +191,8 @@ bool try_pop_up_before_slice(bool is_slice_all, Plater* plater_ref, PartPlate* p
         }
         plater_ref->update();
         // check whether able to slice, if not, return false
-        if (!get_left_extruder_unprintable_text().empty() || !get_right_extruder_unprintable_text().empty()){
+        if (preset->is_bbl_vendor()
+            && (!get_left_extruder_unprintable_text().empty() || !get_right_extruder_unprintable_text().empty())) {
             return false;
         }
         return true;

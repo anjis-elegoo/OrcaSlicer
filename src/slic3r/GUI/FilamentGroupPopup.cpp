@@ -16,8 +16,9 @@ static const wxColour BackGroundColor = wxColour("#FFFFFF");
 static bool should_pop_up()
 {
     const auto &preset_bundle    = wxGetApp().preset_bundle;
-    if (!preset_bundle->is_bbl_vendor()) return false;
     const auto &full_config      = preset_bundle->full_config();
+    if (!preset_bundle->is_bbl_vendor() && !full_config.opt_bool("multi_extruder_multi_filament"))
+        return false;
     const auto  nozzle_diameters = full_config.option<ConfigOptionFloats>("nozzle_diameter");
     return nozzle_diameters->size() > 1;
 }
@@ -92,9 +93,9 @@ FilamentGroupPopup::FilamentGroupPopup(wxWindow *parent) : PopupWindow(parent, w
     const wxString AutoForMatchLabel = _L("Convenience Mode");
     const wxString ManualLabel       = _L("Custom Mode");
 
-    const wxString AutoForFlushDetail = _L("Generates filament grouping for the left and right nozzles based on the most filament-saving principles to minimize waste.");
-    const wxString AutoForMatchDetail = _L("Generates filament grouping for the left and right nozzles based on the printer's actual filament status, reducing the need for manual filament adjustment.");
-    const wxString ManualDetail       = _L("Manually assign filament to the left or right nozzle");
+    const wxString AutoForFlushDetail = _L("Assigns filaments to available extruders and nozzles to minimize flushing waste.");
+    const wxString AutoForMatchDetail = _L("Assigns filaments to available extruders and nozzles based on the printer's current filament status, reducing manual adjustment.");
+    const wxString ManualDetail       = _L("Manually assign filaments to specific extruders and nozzles.");
 
     const wxString AutoForFlushDesp = ""; //_L("(Post-slicing arrangement)");
     const wxString ManualDesp       = "";
@@ -195,7 +196,6 @@ FilamentGroupPopup::FilamentGroupPopup(wxWindow *parent) : PopupWindow(parent, w
 
         top_sizer->Add(button_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT, horizontal_margin);
     }
-
     top_sizer->AddSpacer(vertical_margin);
     SetSizerAndFit(top_sizer);
 

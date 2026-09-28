@@ -194,9 +194,9 @@ private:
     bool m_only_gcode_in_preview {false};
 
     //BBS: extruder dispensing filament
-    std::vector<ExtruderFilament> m_left_extruder_filament;
-    std::vector<ExtruderFilament> m_right_extruder_filament;
+    std::vector<std::vector<ExtruderFilament>> m_extruder_filaments;
     size_t m_nozzle_nums;
+    bool m_is_bbl_printer{false};
 
     // bounding box of toolpaths
     BoundingBoxf3 m_paths_bounding_box;

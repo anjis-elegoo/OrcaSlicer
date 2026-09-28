@@ -280,8 +280,6 @@
             id="extruders"
             onchange="handleExtruderSelect(document.getElementById('extruders').value)"
           >
-            <option value="left" id="extruder_label_0">Left Nozzle</option>
-            <option value="right" id="extruder_label_1">Right Nozzle</option>
           </select>
         </div>
       </div>
@@ -433,13 +431,13 @@
         document.getElementById('multiplier_range_panel').innerText = data.multiplier_range_panel
         document.getElementById('auto_flush_tip').innerText = data.auto_flush_tip
         document.getElementById('calc_btn').innerText = data.calc_btn_panel
-        document.getElementById('extruder_label_0').innerText = data.extruder_label_0
-        document.getElementById('extruder_label_1').innerText = data.extruder_label_1
         document.getElementById('multiplier_label').innerText = data.multiplier_label
         document.getElementById('ok_btn').innerText = data.ok_btn_label
         document.getElementById('cancel_btn').innerText = data.cancel_btn_label
-        updateVolumeRange(m_min_flush_volumes[m_curr_extruder_id],m_max_flush_volumes[m_curr_extruder_id]) 
-        updateMultiplierRange(m_min_flush_multiplier,m_max_flush_multiplier)
+        if (m_min_flush_volumes.length && m_max_flush_volumes.length)
+          updateVolumeRange(m_min_flush_volumes[m_curr_extruder_id], m_max_flush_volumes[m_curr_extruder_id])
+        if (m_min_flush_multiplier !== undefined && m_max_flush_multiplier !== undefined)
+          updateMultiplierRange(m_min_flush_multiplier, m_max_flush_multiplier)
       }
 
       // 计算亮度
@@ -489,6 +487,8 @@
       }
 
       function buildTable(data) {
+        if (!data || !Array.isArray(data.filament_colors) || !Array.isArray(data.flush_volume_matrixs) || !data.flush_volume_matrixs.length)
+          return;
         m_colours = data.filament_colors
         m_number_of_extruders = data.extruder_num
         m_number_of_filaments = data.filament_colors.length
@@ -511,6 +511,15 @@
         updateFlushMultiplier(m_curr_extruder_id)
 
         const selectElement = document.getElementById('extruders');
+        selectElement.innerHTML = "";
+        const labels = Array.isArray(data.extruder_labels) ? data.extruder_labels : [];
+        for (let i = 0; i < m_number_of_extruders; i++) {
+          const option = document.createElement("option");
+          option.value = String(i);
+          option.text = labels[i] || (`Extruder ${i + 1}`);
+          if (i === m_curr_extruder_id) option.selected = true;
+          selectElement.appendChild(option);
+        }
         if (m_number_of_extruders > 1) {
           selectElement.style.display = 'inline-block';
         } else {
@@ -589,7 +598,8 @@
       }
 
       function handleExtruderSelect(extruder) {
-        m_curr_extruder_id = extruder == 'left' ? 0 : 1
+        const parsed = parseInt(extruder, 10);
+        m_curr_extruder_id = Number.isInteger(parsed) ? parsed : 0
         updateVolumeRange(m_min_flush_volumes[m_curr_extruder_id],m_max_flush_volumes[m_curr_extruder_id])
         updateFlushMultiplier(m_min_flush_multiplier[m_curr_extruder_id],m_max_flush_multiplier[m_curr_extruder_id])
         updateFlushMultiplier(m_curr_extruder_id)
