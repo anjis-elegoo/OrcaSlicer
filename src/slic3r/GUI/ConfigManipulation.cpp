@@ -1163,9 +1163,12 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     //     toggle_field(el, have_sequential_printing);
     toggle_field("print_order", !have_sequential_printing, -1, _L("Print order cannot be edited when the print sequence is By object."));
 
-    toggle_field("single_extruder_multi_material", !is_BBL_Printer, -1, _L("This setting is unavailable for Bambu Lab printers."));
-
     auto bSEMM = preset_bundle->printers.get_edited_preset().config.opt_bool("single_extruder_multi_material");
+    const wxString multimaterial_reason = is_BBL_Printer ? _L("This setting is unavailable for Bambu Lab printers.") :
+        _L("Disable the other multimaterial mode to use this setting.");
+    toggle_field("single_extruder_multi_material", !is_BBL_Printer &&
+                 !preset_bundle->printers.get_edited_preset().config.opt_bool("multi_extruder_multi_filament"), -1, multimaterial_reason);
+    toggle_field("multi_extruder_multi_filament", !is_BBL_Printer && !bSEMM, -1, multimaterial_reason);
     const bool supports_wipe_tower_2 = !is_BBL_Printer && preset_bundle->printers.get_edited_preset().config.opt_enum<WipeTowerType>("wipe_tower_type") == WipeTowerType::Type2;
 
     toggle_field("ooze_prevention", !bSEMM, -1, _L("This setting is unavailable in single extruder multimaterial mode."));

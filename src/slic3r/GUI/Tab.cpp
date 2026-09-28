@@ -2219,7 +2219,7 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     }
 
 
-    if (opt_key == "single_extruder_multi_material"  ){
+    if (opt_key == "single_extruder_multi_material" || opt_key == "multi_extruder_multi_filament") {
         wxGetApp().sidebar().show_SEMM_buttons();
         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     }
@@ -2293,7 +2293,7 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     }
 
 
-    if (opt_key == "single_extruder_multi_material"  ){
+    if (opt_key == "single_extruder_multi_material" || opt_key == "multi_extruder_multi_filament") {
         wxGetApp().sidebar().show_SEMM_buttons();
         wxGetApp().get_tab(Preset::TYPE_PRINT)->update();
     }
@@ -2547,7 +2547,8 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
 
 
     //Orca: sync filament num if it's a multi tool printer
-    if (opt_key == "extruders_count" && !m_config->opt_bool("single_extruder_multi_material")){
+    if (opt_key == "extruders_count" && !m_config->opt_bool("single_extruder_multi_material")
+        && !m_config->opt_bool("multi_extruder_multi_filament")) {
         const size_t num_extruder = boost::any_cast<size_t>(value);
         auto        *bundle       = wxGetApp().preset_bundle;
         Sidebar     &sidebar      = wxGetApp().plater()->sidebar();
@@ -2569,8 +2570,9 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
         }
     }
 
-    //Orca: disable purge_in_prime_tower if single_extruder_multi_material is disabled
-    if (opt_key == "single_extruder_multi_material" && m_config->opt_bool("single_extruder_multi_material") == false){
+    // Without either multi-material mode, Type 2 uses prime_volume rather than the flush matrix.
+    if ((opt_key == "single_extruder_multi_material" || opt_key == "multi_extruder_multi_filament") &&
+        !m_config->opt_bool("single_extruder_multi_material") && !m_config->opt_bool("multi_extruder_multi_filament")) {
         DynamicPrintConfig new_conf = *m_config;
         new_conf.set_key_value("purge_in_prime_tower", new ConfigOptionBool(false));
         m_config_manipulation.apply(m_config, &new_conf);
@@ -6023,8 +6025,9 @@ if (is_marlin_flavor)
     if (from_initial_build) {
         // create a page, but pretend it's an extruder page, so we can add it to m_pages ourselves
         auto page     = add_options_page(L("Multimaterial"), "custom-gcode_multi_material", true); // ORCA: icon only visible on placeholders
-        auto optgroup = page->new_optgroup(L("Single extruder multi-material setup"), "param_multi_material");
+        auto optgroup = page->new_optgroup(L("Multi-material setup"), "param_multi_material");
         optgroup->append_single_option_line("single_extruder_multi_material", "printer_multimaterial_setup#single-extruder-multi-material");
+        optgroup->append_single_option_line("multi_extruder_multi_filament");
         ConfigOptionDef def;
         def.type    = coInt, def.set_default_value(new ConfigOptionInt((int) m_extruders_count));
         def.label   = L("Extruders");
@@ -6048,6 +6051,18 @@ if (is_marlin_flavor)
             if (v.empty()) return;
             size_t extruders_count = size_t(boost::any_cast<int>(v));
             wxTheApp->CallAfter([this, opt_key, value, extruders_count]() {
+                if ((opt_key == "single_extruder_multi_material" || opt_key == "multi_extruder_multi_filament") &&
+                    boost::any_cast<bool>(value)) {
+                    const char *other_mode = opt_key == "single_extruder_multi_material" ?
+                        "multi_extruder_multi_filament" : "single_extruder_multi_material";
+                    if (m_config->opt_bool(other_mode)) {
+                        DynamicPrintConfig new_conf = *m_config;
+                        new_conf.set_key_value(other_mode, new ConfigOptionBool(false));
+                        load_config(new_conf);
+                    }
+                }
+                const size_t old_flush_extruder_count =
+                    m_preset_bundle->project_config.option<ConfigOptionFloats>("flush_multiplier")->values.size();
                 if (opt_key == "extruders_count" || opt_key == "single_extruder_multi_material") {
                     const size_t old_extruders_count = m_extruders_count;
                     extruders_count_changed(extruders_count);
@@ -6109,6 +6124,16 @@ if (is_marlin_flavor)
                 else {
                     update_dirty();
                     on_value_change(opt_key, value);
+                }
+                // Recalculate only for user edits, not when loading a preset or project.
+                if (m_config->opt_bool("multi_extruder_multi_filament") &&
+                    wxGetApp().app_config->get("auto_calculate_flush") == "all") {
+                    if (opt_key == "multi_extruder_multi_filament" && boost::any_cast<bool>(value)) {
+                        wxGetApp().plater()->sidebar().auto_calc_flushing_volumes(-1);
+                    } else if (opt_key == "extruders_count") {
+                        for (size_t extruder_id = old_flush_extruder_count; extruder_id < m_extruders_count; ++extruder_id)
+                            wxGetApp().plater()->sidebar().auto_calc_flushing_volumes(-1, static_cast<int>(extruder_id));
+                    }
                 }
             });
         };
@@ -6835,6 +6860,10 @@ void TabPrinter::toggle_options()
             toggle_option(el, supports_wipe_tower_2, -1, _L("Select wipe tower Type 2 on a non-Bambu printer to use this setting."));
 
         auto bSEMM = m_config->opt_bool("single_extruder_multi_material");
+        const wxString multimaterial_reason = is_BBL_printer ? _L("This setting is unavailable for Bambu Lab printers.") :
+            _L("Disable the other multimaterial mode to use this setting.");
+        toggle_option("single_extruder_multi_material", !is_BBL_printer && !m_config->opt_bool("multi_extruder_multi_filament"), -1, multimaterial_reason);
+        toggle_option("multi_extruder_multi_filament", !is_BBL_printer && !bSEMM, -1, multimaterial_reason);
         if (!bSEMM && m_config->opt_bool("manual_filament_change")) {
             DynamicPrintConfig new_conf = *m_config;
             new_conf.set_key_value("manual_filament_change", new ConfigOptionBool(false));
@@ -6842,8 +6871,9 @@ void TabPrinter::toggle_options()
         }
         toggle_option("extruders_count", !bSEMM, -1, _L("Extruder count cannot be edited in single extruder multimaterial mode."));
         toggle_option("manual_filament_change", bSEMM, -1, _L("Enable single extruder multimaterial mode to use manual filament changes."));
-        toggle_option("purge_in_prime_tower", bSEMM && supports_wipe_tower_2, -1,
-            _L("Enable single extruder multimaterial mode with wipe tower Type 2 on a non-Bambu printer to use this setting."));
+        toggle_option("purge_in_prime_tower", supports_wipe_tower_2 &&
+                      (bSEMM || m_config->opt_bool("multi_extruder_multi_filament")), -1,
+            _L("Enable a multimaterial mode and select wipe tower Type 2 on a non-Bambu printer to use this setting."));
 
         // IDEX/IQEX: show carriage config options only when is_imex is enabled
         bool is_imex = m_config->opt_bool("is_imex");
