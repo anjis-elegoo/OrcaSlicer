@@ -147,7 +147,9 @@ public:
 		const std::vector<unsigned int> &tools,
 		// If true, the last priming are will be the same as the other priming areas, and the rest of the wipe will be performed inside the wipe tower.
 		// If false, the last priming are will be large enough to wipe the last extruder sufficiently.
-		bool 						last_wipe_inside_wipe_tower);
+		bool 						last_wipe_inside_wipe_tower,
+        // Per-step volumes account for hotend occupancy; empty keeps legacy priming behavior.
+        const std::vector<float>& priming_volumes = {});
 
 	// Returns gcode for a toolchange and a final print head position.
 	// On the first layer, extrude a brim around the future wipe tower first.

@@ -70,8 +70,8 @@ namespace FilamentGroupUtils
 
     // TODO: add explanation
     std::vector<int> calc_max_group_size(const std::vector<std::map<int, int>>& ams_counts, bool ignore_ext_filament) {
-        // add default value to 2
-        std::vector<int>group_size(2, 0);
+        // One capacity slot per extruder.
+        std::vector<int> group_size(ams_counts.size(), 0);
         for (size_t idx = 0; idx < ams_counts.size(); ++idx) {
             const auto& ams_count = ams_counts[idx];
             for (auto iter = ams_count.begin(); iter != ams_count.end(); ++iter) {
@@ -102,8 +102,8 @@ namespace FilamentGroupUtils
             };
 
         // change filament type to type format in preset
-        // defualt size set to 2
-        std::vector<std::vector<MachineFilamentInfo>> machine_filaments(2);
+        // One filament list per extruder.
+        std::vector<std::vector<MachineFilamentInfo>> machine_filaments(filament_configs.size());
         for (size_t idx = 0; idx < filament_configs.size(); ++idx) {
             auto& arr = filament_configs[idx];
             for (auto& item : arr) {
@@ -140,10 +140,11 @@ namespace FilamentGroupUtils
 
     std::vector<std::vector<MachineFilamentInfo>> build_machine_filaments(const std::vector<std::vector<DynamicPrintConfig>>& filament_configs, const std::vector<std::map<int, int>>& ams_counts, bool ignore_ext_filament)
     {
-        std::vector<std::vector<MachineFilamentInfo>> ret(2);
-        std::vector<int> ams_size(2, 0);
+        const size_t extruder_count = std::max(filament_configs.size(), ams_counts.size());
+        std::vector<std::vector<MachineFilamentInfo>> ret(extruder_count);
+        std::vector<int> ams_size(extruder_count, 0);
         std::vector<std::vector<MachineFilamentInfo>> full_machine_filaments = build_full_machine_filaments(filament_configs);
-        assert(full_machine_filaments.size() == 2);
+        full_machine_filaments.resize(extruder_count);
         for (size_t idx = 0; idx < std::min(ams_counts.size(),ams_size.size()); ++idx) {
             const auto& ams_count = ams_counts[idx];
             for (auto iter = ams_count.begin(); iter != ams_count.end(); ++iter) {
@@ -151,7 +152,6 @@ namespace FilamentGroupUtils
             }
         }
 
-        assert(full_machine_filaments.size() == ams_size.size());
         for (size_t idx = 0; idx < std::min(ams_size.size(), full_machine_filaments.size()); ++idx) {
             std::vector<MachineFilamentInfo> tmp;
             for (size_t j = 0; j < full_machine_filaments[idx].size(); ++j) {
@@ -176,31 +176,51 @@ namespace FilamentGroupUtils
 
     bool collect_unprintable_limits(const std::vector<std::set<int>>& physical_unprintables, const std::vector<std::set<int>>& geometric_unprintables, std::vector<std::set<int>>& unprintable_limits)
     {
-        unprintable_limits.clear();
-        unprintable_limits.resize(2);
-        // resize unprintables to 2
+        const size_t extruder_count = std::max(physical_unprintables.size(), geometric_unprintables.size());
+        unprintable_limits.assign(extruder_count, {});
         auto resized_physical_unprintables = physical_unprintables;
-        resized_physical_unprintables.resize(2);
+        resized_physical_unprintables.resize(extruder_count);
         auto resized_geometric_unprintables = geometric_unprintables;
-        resized_geometric_unprintables.resize(2);
+        resized_geometric_unprintables.resize(extruder_count);
 
         bool conflict = false;
-        conflict |= remove_intersection(resized_physical_unprintables[0], resized_physical_unprintables[1]);
-        conflict |= remove_intersection(resized_geometric_unprintables[0], resized_geometric_unprintables[1]);
-
-        std::map<int, int>filament_unprintable_exts;
-        for (auto& ext_unprintables : { resized_physical_unprintables,resized_geometric_unprintables }) {
-            for (int eid = 0; eid < ext_unprintables.size(); ++eid) {
-                for (int fid : ext_unprintables[eid]) {
-                    if (auto iter = filament_unprintable_exts.find(fid); iter != filament_unprintable_exts.end() && iter->second != eid)
-                        conflict = true;
-                    else
-                        filament_unprintable_exts[fid] = eid;
+        // Preserve the original order: clear all-extruder bans within each constraint type
+        // before merging physical and geometric constraints.
+        auto remove_all_extruder_bans = [&](std::vector<std::set<int>>& unprintables) {
+            std::map<int, size_t> counts;
+            for (const auto& bans : unprintables)
+                for (int fid : bans)
+                    ++counts[fid];
+            for (const auto& [fid, count] : counts) {
+                if (count == extruder_count) {
+                    conflict = true;
+                    for (auto& bans : unprintables)
+                        bans.erase(fid);
                 }
             }
+        };
+        remove_all_extruder_bans(resized_physical_unprintables);
+        remove_all_extruder_bans(resized_geometric_unprintables);
+
+        for (size_t eid = 0; eid < extruder_count; ++eid) {
+            unprintable_limits[eid].insert(resized_physical_unprintables[eid].begin(), resized_physical_unprintables[eid].end());
+            unprintable_limits[eid].insert(resized_geometric_unprintables[eid].begin(), resized_geometric_unprintables[eid].end());
         }
-        for (auto& elem : filament_unprintable_exts)
-            unprintable_limits[elem.second].insert(elem.first);
+
+        std::map<int, size_t> unprintable_count;
+        for (const auto& ext_unprintables : unprintable_limits)
+            for (int fid : ext_unprintables)
+                ++unprintable_count[fid];
+        for (const auto& [fid, count] : unprintable_count) {
+            if (extruder_count > 0 && count == extruder_count) {
+                conflict = true;
+                // The combined constraints leave nowhere to print. Keep the physical bans,
+                // which took precedence in the original two-extruder implementation.
+                for (size_t eid = 0; eid < extruder_count; ++eid)
+                    if (resized_physical_unprintables[eid].count(fid) == 0)
+                        unprintable_limits[eid].erase(fid);
+            }
+        }
 
         return !conflict;
     }
@@ -251,10 +271,6 @@ namespace FilamentGroupUtils
         std::vector<std::set<int>>unprintable_idxs;
         // map the unprintable filaments to idx of used filaments , if not used ,just ignore
         extract_indices(used_filaments, unprintable_elems, unprintable_idxs);
-        // remove elems that cannot be printed in both extruder
-        if (unprintable_idxs.size() > 1)
-            remove_intersection(unprintable_idxs[0], unprintable_idxs[1]);
-
         for (size_t group_id = 0; group_id < unprintable_idxs.size(); ++group_id)
             for (auto f : unprintable_idxs[group_id])
                 unplaceable_limits[f].emplace_back(group_id);

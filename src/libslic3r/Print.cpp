@@ -340,6 +340,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "filament_max_volumetric_speed"
             || opt_key == "gcode_flavor"
             || opt_key == "single_extruder_multi_material"
+            || opt_key == "multi_extruder_multi_filament"
             || opt_key == "nozzle_temperature"
             // BBS
             || opt_key == "supertack_plate_temp"
@@ -3109,18 +3110,18 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 std::vector<int>filament_maps = this->get_filament_maps();
                 auto map_mode = get_filament_map_mode();
                 // Grouping returns a nozzle-aware result; the 1-based extruder map for the by-object
-                // path is derived from it. It is computed in every static map mode (in manual modes it
-                // mirrors the user's assignment) and published print-wide: GCode's per-nozzle
+                // path is derived from it. It is computed in every static map mode and published
+                // print-wide: GCode's per-nozzle
                 // placeholder and config-index lookups read it via get_layered_nozzle_group_result(),
                 // and without it sequential exports on multi-nozzle printers see an empty nozzle table
                 // (e.g. nozzle_diameter_at_nozzle_id[]) and custom g-code fails to resolve.
                 auto grouping_result = ToolOrdering::get_recommended_filament_maps(all_filaments, this, map_mode, physical_unprintables, geometric_unprintables, filament_unprintable_volumes);
                 this->set_nozzle_group_result(std::make_shared<MultiNozzleUtils::LayeredNozzleGroupResult>(grouping_result));
-                // Orca: the sequential write-back stays gated to auto modes. In manual modes the
-                // config maps already carry the user's assignment (the per-object ToolOrdering below
-                // consumes them directly), so a write-back would only re-store the pre-slice values;
-                // keeping the gate avoids churning the config on every sequential manual slice.
-                if (map_mode < FilamentMapMode::fmmManual) {
+                // Per-object ordering reads the config map. Restore one-to-one assignments when
+                // grouping is disabled, even if the project still carries a manual mapping.
+                const bool conventional_extruders = !is_BBL_printer() && m_config.nozzle_diameter.size() > 1 &&
+                    !m_config.multi_extruder_multi_filament.value;
+                if (map_mode < FilamentMapMode::fmmManual || conventional_extruders) {
                     auto derived_maps = grouping_result.get_extruder_map(false);
                     if (!derived_maps.empty()) {
                         filament_maps = derived_maps;
@@ -4168,15 +4169,15 @@ std::vector<std::set<int>> Print::get_physical_unprintable_filaments(const std::
     if (extruder_num < 2)
         return physical_unprintables;
 
-    auto get_unprintable_extruder_id = [&](unsigned int filament_idx) -> int {
+    auto get_unprintable_extruders = [&](unsigned int filament_idx) {
+        std::vector<int> ids;
         // filament_printable may be shorter than the filament count; get_at() clamps.
         int status = m_config.filament_printable.get_at(filament_idx);
         for (int i = 0; i < extruder_num; ++i) {
-            if (!(status >> i & 1)) {
-                return i;
-            }
+            if (!(status >> i & 1))
+                ids.push_back(i);
         }
-        return -1;
+        return ids;
     };
 
 
@@ -4187,10 +4188,8 @@ std::vector<std::set<int>> Print::get_physical_unprintable_filaments(const std::
     }
 
     for (auto f : used_filaments) {
-        int extruder_id = get_unprintable_extruder_id(f);
-        if (extruder_id == -1)
-            continue;
-        physical_unprintables[extruder_id].insert(f);
+        for (int extruder_id : get_unprintable_extruders(f))
+            physical_unprintables[extruder_id].insert(f);
     }
 
     return physical_unprintables;
@@ -4595,7 +4594,6 @@ void Print::_make_wipe_tower()
         // group result set on the tower above resolves each filament to its nozzle slot per layer.
         MultiNozzleUtils::NozzleStatusRecorder nozzle_recorder;
 
-        std::vector<int>filament_maps = get_filament_maps();
         int layer_idx = -1;
 
         unsigned int current_filament_id = m_wipe_tower_data.tool_ordering.first_extruder();
@@ -4645,8 +4643,11 @@ void Print::_make_wipe_tower()
                 }
 
                 //During the filament change, the extruder will extrude an extra length of grab_length for the corresponding detection, so the purge can reduce this length.
-                int grab_extruder_id = filament_maps[filament_id] - 1;
-                float grab_purge_volume = m_config.grab_length.get_at(grab_extruder_id) * 2.4; //(diameter/2)^2*PI=2.4
+                const size_t grab_extruder_id = get_extruder_index(m_config, filament_id);
+                const float grab_length = grab_extruder_id < m_config.grab_length.size()
+                    ? float(m_config.grab_length.get_at(grab_extruder_id))
+                    : 0.f;
+                float grab_purge_volume = grab_length * 2.4f; //(diameter/2)^2*PI=2.4
                 volume_to_purge = std::max(0.f, volume_to_purge - grab_purge_volume);
 
                 // Prime volume per-filament: the tower now picks extruder-change vs nozzle-change
@@ -4747,6 +4748,14 @@ void Print::_make_wipe_tower()
                 }
             }
         }
+        const auto& nozzle_group_result = m_wipe_tower_data.tool_ordering.get_layered_nozzle_group_result();
+        const bool grouped_purge = m_config.multi_extruder_multi_filament && m_config.purge_in_prime_tower;
+        std::vector<std::vector<double>> extruder_flush_matrices;
+        if (grouped_purge) {
+            for (size_t eid = 0; eid < m_config.nozzle_diameter.size(); ++eid)
+                extruder_flush_matrices.push_back(get_flush_volumes_matrix(
+                    m_config.flush_volumes_matrix.values, eid, m_config.nozzle_diameter.size()));
+        }
         // Initialize the wipe tower.
         WipeTower2 wipe_tower(m_config, m_default_region_config, m_plate_index, m_origin, wipe_volumes,
                               m_wipe_tower_data.tool_ordering.first_extruder());
@@ -4758,14 +4767,42 @@ void Print::_make_wipe_tower()
         for (size_t i = 0; i < number_of_extruders; ++i)
             wipe_tower.set_extruder(i, m_config);
 
+        MultiNozzleUtils::NozzleStatusRecorder nozzle_status;
+        std::vector<float> priming_volumes;
+        if (grouped_purge && m_config.single_extruder_multi_material_priming) {
+            // Priming revisits hotends too; flush their resident filament before recording the new one.
+            for (unsigned int fid : m_wipe_tower_data.tool_ordering.all_extruders()) {
+                float volume = m_config.prime_volume;
+                if (auto nozzle = nozzle_group_result.get_nozzle_for_filament(fid, 0)) {
+                    const int previous_filament = nozzle_status.get_filament_in_nozzle(nozzle->group_id);
+                    if (previous_filament >= 0 && previous_filament != int(fid)) {
+                        const float multiplier = m_config.prime_volume_mode == PrimeVolumeMode::pvmFast
+                            ? m_config.flush_multiplier_fast.get_at(nozzle->extruder_id)
+                            : m_config.flush_multiplier.get_at(nozzle->extruder_id);
+                        volume = extruder_flush_matrices[nozzle->extruder_id]
+                            [size_t(previous_filament) * number_of_extruders + fid] * multiplier;
+                    }
+                    nozzle_status.set_nozzle_status(nozzle->group_id, fid, nozzle->extruder_id);
+                }
+                priming_volumes.push_back(volume);
+            }
+        }
         m_wipe_tower_data.priming = Slic3r::make_unique<std::vector<WipeTower::ToolChangeResult>>(
-            wipe_tower.prime((float)this->skirt_first_layer_height(), m_wipe_tower_data.tool_ordering.all_extruders(), false));
+            wipe_tower.prime((float)this->skirt_first_layer_height(), m_wipe_tower_data.tool_ordering.all_extruders(), false, priming_volumes));
 
         // Lets go through the wipe tower layers and determine pairs of extruder changes for each
         // to pass to wipe_tower (so that it can use it for planning the layout of the tower)
         {
             unsigned int current_extruder_id = m_wipe_tower_data.tool_ordering.all_extruders().back();
+            if (grouped_purge && !m_config.single_extruder_multi_material_priming) {
+                // The generated priming paths are not emitted when priming is disabled.
+                nozzle_status = MultiNozzleUtils::NozzleStatusRecorder();
+                if (auto nozzle = nozzle_group_result.get_nozzle_for_filament(current_extruder_id, 0))
+                    nozzle_status.set_nozzle_status(nozzle->group_id, current_extruder_id, nozzle->extruder_id);
+            }
+            int layer_idx = -1;
             for (auto &layer_tools : m_wipe_tower_data.tool_ordering.layer_tools()) { // for all layers
+                ++layer_idx;
                 if (!layer_tools.has_wipe_tower)
                     continue;
                 bool first_layer = &layer_tools == &m_wipe_tower_data.tool_ordering.front();
@@ -4775,6 +4812,23 @@ void Print::_make_wipe_tower()
                     if ((first_layer && extruder_id == m_wipe_tower_data.tool_ordering.all_extruders().back()) || extruder_id !=
                         current_extruder_id) {
                         float volume_to_wipe = m_config.prime_volume;
+                        if (grouped_purge) {
+                            if (auto nozzle = nozzle_group_result.get_nozzle_for_filament(extruder_id, layer_idx)) {
+                                const int previous_filament = nozzle_status.get_filament_in_nozzle(nozzle->group_id);
+                                // Returning to a hotend must flush its resident filament, not the last active hotend's.
+                                if (previous_filament >= 0 && previous_filament != int(extruder_id)) {
+                                    const float multiplier = m_config.prime_volume_mode == PrimeVolumeMode::pvmFast
+                                        ? m_config.flush_multiplier_fast.get_at(nozzle->extruder_id)
+                                        : m_config.flush_multiplier.get_at(nozzle->extruder_id);
+                                    volume_to_wipe = extruder_flush_matrices[nozzle->extruder_id]
+                                        [size_t(previous_filament) * number_of_extruders + extruder_id] * multiplier;
+                                    const float minimum = m_config.filament_minimal_purge_on_wipe_tower.get_at(extruder_id);
+                                    volume_to_wipe = layer_tools.wiping_extrusions().mark_wiping_extrusions(
+                                        *this, previous_filament, extruder_id, std::max(0.f, volume_to_wipe - minimum)) + minimum;
+                                }
+                                nozzle_status.set_nozzle_status(nozzle->group_id, extruder_id, nozzle->extruder_id);
+                            }
+                        }
                         if (m_config.purge_in_prime_tower && m_config.single_extruder_multi_material) {
                             volume_to_wipe = wipe_volumes[current_extruder_id][extruder_id]; // total volume to wipe after this toolchange
                             volume_to_wipe *= m_config.flush_multiplier.get_at(0);

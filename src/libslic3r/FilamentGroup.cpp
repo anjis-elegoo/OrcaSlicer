@@ -41,7 +41,7 @@ namespace Slic3r
         return filament_merge_map;
     }
 
-    static uint64_t fnv_hash_nozzle(int volume_type, int is_right_extruder, int loaded_filament = -1)
+    static uint64_t fnv_hash_nozzle(int volume_type, int extruder_id, int loaded_filament = -1)
     {
         constexpr uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
         constexpr uint64_t FNV_PRIME        = 1099511628211ULL;
@@ -52,7 +52,7 @@ namespace Slic3r
         uint64_t h = FNV_OFFSET_BASIS;
         h ^= static_cast<uint64_t>(volume_type) + SALT_A;
         h *= FNV_PRIME;
-        h ^= static_cast<uint64_t>(is_right_extruder) + SALT_B;
+        h ^= static_cast<uint64_t>(extruder_id) + SALT_B;
         h *= FNV_PRIME;
         if (loaded_filament >= 0) {
             h ^= static_cast<uint64_t>(loaded_filament) + SALT_C;
@@ -190,7 +190,7 @@ namespace Slic3r
         for (const auto& nozzle : ctx.nozzle_info.nozzle_list) {
             auto it = ctx.nozzle_info.nozzle_status.find(nozzle.group_id);
             int loaded_filament = (it != ctx.nozzle_info.nozzle_status.end()) ? it->second : -1;
-            uint64_t hash = fnv_hash_nozzle(nozzle.volume_type, nozzle.group_id > 0, loaded_filament);
+            uint64_t hash = fnv_hash_nozzle(nozzle.volume_type, nozzle.extruder_id, loaded_filament);
             nozzle_type_count[hash]++;
         }
 
@@ -248,7 +248,7 @@ namespace Slic3r
             if (nozzle.group_id < k) {
                 auto it = ctx.nozzle_info.nozzle_status.find(nozzle.group_id);
                 int loaded_filament = (it != ctx.nozzle_info.nozzle_status.end()) ? it->second : -1;
-                nozzles_hash[nozzle.group_id] = fnv_hash_nozzle(nozzle.volume_type, nozzle.group_id > 0, loaded_filament);
+                nozzles_hash[nozzle.group_id] = fnv_hash_nozzle(nozzle.volume_type, nozzle.extruder_id, loaded_filament);
             }
         }
 
@@ -261,7 +261,7 @@ namespace Slic3r
         for (long long mask = 0; mask < total; mask++) {
             long long num = mask;
             std::unordered_map<int, std::vector<int>> nozzles_filaments;
-            std::vector<int> groups_count(k, 0);
+            std::vector<int> groups_count(ctx.machine_info.max_group_size.size(), 0);
             std::vector<int> used_labels(n, 0);
 
             for (int i = 0; i < n; i++) {
@@ -269,7 +269,14 @@ namespace Slic3r
                 num /= k;
                 used_labels[i] = g_id;
                 nozzles_filaments[g_id].emplace_back(i);
-                groups_count[g_id]++;
+                if (g_id >= 0 && g_id < (int)ctx.nozzle_info.nozzle_list.size()) {
+                    int extruder_id = ctx.nozzle_info.nozzle_list[g_id].extruder_id;
+                    if (extruder_id >= 0) {
+                        if (extruder_id >= (int)groups_count.size())
+                            groups_count.resize(extruder_id + 1, 0);
+                        ++groups_count[extruder_id];
+                    }
+                }
             }
 
             // Hash dedup
@@ -295,8 +302,9 @@ namespace Slic3r
             prefer_level += placeable_count * UNPLACEABLE_LIMIT_REWARD;
 
             bool size_ok = true;
-            for (int g = 0; g < k; g++) {
-                if (g < (int)ctx.machine_info.max_group_size.size() && groups_count[g] > ctx.machine_info.max_group_size[g])
+            for (int extruder_id = 0; extruder_id < (int)groups_count.size(); ++extruder_id) {
+                if (extruder_id < (int)ctx.machine_info.max_group_size.size() &&
+                    groups_count[extruder_id] > ctx.machine_info.max_group_size[extruder_id])
                     size_ok = false;
             }
             if (size_ok)
@@ -304,8 +312,9 @@ namespace Slic3r
 
             if (ctx.group_info.strategy == FGStrategy::BestFit) {
                 bool all_full = true;
-                for (int g = 0; g < k; g++) {
-                    if (g < (int)ctx.machine_info.max_group_size.size() && groups_count[g] < ctx.machine_info.max_group_size[g])
+                for (int extruder_id = 0; extruder_id < (int)ctx.machine_info.max_group_size.size(); ++extruder_id) {
+                    int group_count = extruder_id < (int)groups_count.size() ? groups_count[extruder_id] : 0;
+                    if (group_count < ctx.machine_info.max_group_size[extruder_id])
                         all_full = false;
                 }
                 if (all_full)
@@ -313,7 +322,9 @@ namespace Slic3r
             }
 
             for (int g = 0; g < k; g++) {
-                if (g < (int)ctx.machine_info.prefer_non_model_filament.size() && ctx.machine_info.prefer_non_model_filament[g]) {
+                int extruder_id = g < (int)ctx.nozzle_info.nozzle_list.size() ? ctx.nozzle_info.nozzle_list[g].extruder_id : -1;
+                if (extruder_id >= 0 && extruder_id < (int)ctx.machine_info.prefer_non_model_filament.size() &&
+                    ctx.machine_info.prefer_non_model_filament[extruder_id]) {
                     for (int fidx : nozzles_filaments[g]) {
                         if (ctx.model_info.filament_info[used_filaments[fidx]].usage_type == SupportOnly)
                             prefer_level += SUPPORT_PREFER_REWARD;
@@ -330,8 +341,15 @@ namespace Slic3r
             double score = full_evaluate(used_filaments, full_map, ctx, get_custom_seq, &flush_vol);
 
             int master_ex_id = ctx.machine_info.master_extruder_id;
-            if (master_ex_id < k && groups_count[master_ex_id] < (int)(used_filaments.size() + 1) / 2)
-                score += ABSOLUTE_FLUSH_GAP_TOLERANCE;
+            if (ctx.machine_info.use_master_extruder_preference && master_ex_id >= 0) {
+                int master_group_count = master_ex_id < (int)groups_count.size() ? groups_count[master_ex_id] : 0;
+                int max_other = 0;
+                for (int eid = 0; eid < (int)groups_count.size(); ++eid)
+                    if (eid != master_ex_id)
+                        max_other = std::max(max_other, groups_count[eid]);
+                if (master_group_count < max_other)
+                    score += ABSOLUTE_FLUSH_GAP_TOLERANCE;
+            }
 
             if (prefer_level > best_prefer_level || (prefer_level == best_prefer_level && score < best_score)) {
                 best_score = score;
@@ -416,30 +434,34 @@ namespace Slic3r
 
         const int fail_cost = 9999;
 
-        // these code is to make we machine filament info size is 2
+        // Pad machine filament info to the extruder count.
         std::vector<std::vector<MachineFilamentInfo>> machine_filament_info = machine_filament_info_;
-        machine_filament_info.resize(2);
+        size_t extruder_count = machine_filament_info.size();
+        for (const auto& nozzle : nozzle_list)
+            if (nozzle.extruder_id >= 0)
+                extruder_count = std::max(extruder_count, static_cast<size_t>(nozzle.extruder_id + 1));
+        machine_filament_info.resize(extruder_count);
 
         int best_cost = std::numeric_limits<int>::max();
         std::vector<int>best_map;
 
         for (auto &filament_to_nozzle : filament_to_nozzles) {
-            std::vector<std::vector<int>> group_filaments(2);
-            std::vector<std::vector<Color>>group_colors(2);
+            std::vector<std::vector<int>> group_filaments(extruder_count);
+            std::vector<std::vector<Color>> group_colors(extruder_count);
 
             for (size_t i = 0; i < used_filaments.size(); ++i) {
                 auto &nozzle       = nozzle_list[filament_to_nozzle[used_filaments[i]]];
-                int   target_group = nozzle.extruder_id == 0 ? 0 : 1;
+                int   target_group = nozzle.extruder_id;
                 group_colors[target_group].emplace_back(used_filament_info[i].color);
                 group_filaments[target_group].emplace_back(i);
             }
 
             int group_cost = 0;
-            for (size_t i = 0; i < 2; ++i) {
+            for (size_t i = 0; i < extruder_count; ++i) {
                 if (group_colors[i].empty())
                     continue;
                 if (machine_filament_info[i].empty()) {
-                    group_cost += group_colors.size() * fail_cost;
+                    group_cost += group_colors[i].size() * fail_cost;
                     continue;
                 }
                 std::vector<std::vector<float>>distance_matrix(group_colors[i].size(), std::vector<float>(machine_filament_info[i].size()));
@@ -899,30 +921,52 @@ namespace Slic3r
         return result;
     }
 
-    std::map<int, int> FilamentGroup::rebuild_unprintables(const std::vector<unsigned int>& used_filaments, const std::map<int, int>& extruder_unprintables)
+    // Merge physical/geometric bans with volume bans into per-filament forbidden extruders
+    // for Match-mode matching. Ban an extruder only if every hotend on it is volume-incompatible;
+    // drop the constraint if the filament would have nowhere to go.
+    std::unordered_map<int, std::vector<int>> FilamentGroup::rebuild_unprintables(const std::vector<unsigned int>& used_filaments, const std::unordered_map<int, std::vector<int>>& extruder_unprintables)
     {
-        std::map<int, int> ret;
-        for (int f_idx = 0; f_idx < used_filaments.size(); f_idx++) {
-            int unprintable_ext = -1;
-            if (extruder_unprintables.find(f_idx) != extruder_unprintables.end()) {
-                unprintable_ext = extruder_unprintables.at(f_idx);
+        std::unordered_map<int, std::vector<int>> ret;
+        size_t extruder_count = std::max(ctx.model_info.unprintable_filaments.size(), ctx.machine_info.max_group_size.size());
+        extruder_count = std::max(extruder_count, ctx.machine_info.machine_filament_info.size());
+        for (const auto& nozzle : ctx.nozzle_info.nozzle_list)
+            if (nozzle.extruder_id >= 0)
+                extruder_count = std::max(extruder_count, static_cast<size_t>(nozzle.extruder_id + 1));
+
+        std::vector<std::vector<const MultiNozzleUtils::NozzleInfo*>> extruder_nozzles(extruder_count);
+        for (const auto& nozzle : ctx.nozzle_info.nozzle_list)
+            if (nozzle.extruder_id >= 0 && nozzle.extruder_id < (int)extruder_count)
+                extruder_nozzles[nozzle.extruder_id].push_back(&nozzle);
+
+        for (int f_idx = 0; f_idx < (int)used_filaments.size(); f_idx++) {
+            std::set<int> forbidden;
+            if (auto it = extruder_unprintables.find(f_idx); it != extruder_unprintables.end()) {
+                for (int extruder_id : it->second)
+                    if (extruder_id >= 0 && extruder_id < (int)extruder_count)
+                        forbidden.insert(extruder_id);
             }
 
-            bool multi_unprintable = false;
-            auto unprintable_volumes = ctx.model_info.unprintable_volumes[used_filaments[f_idx]];
-            for (int nozzle_idx = 0; nozzle_idx != ctx.nozzle_info.nozzle_list.size(); nozzle_idx++) {
-                auto nozzle_info = ctx.nozzle_info.nozzle_list[nozzle_idx];
-
-                if (unprintable_volumes.count(nozzle_info.volume_type)) {
-                    if (unprintable_ext == -1)
-                        unprintable_ext = nozzle_info.extruder_id;
-                    else if (unprintable_ext != nozzle_info.extruder_id)
-                        multi_unprintable = true;
+            const auto& unprintable_volumes = ctx.model_info.unprintable_volumes[used_filaments[f_idx]];
+            for (int extruder_id = 0; extruder_id < (int)extruder_nozzles.size(); ++extruder_id) {
+                const auto& nozzles = extruder_nozzles[extruder_id];
+                if (nozzles.empty())
+                    continue;
+                bool all_unprintable = true;
+                for (const auto* nozzle : nozzles) {
+                    if (unprintable_volumes.count(nozzle->volume_type) == 0) {
+                        all_unprintable = false;
+                        break;
+                    }
                 }
+                if (all_unprintable)
+                    forbidden.insert(extruder_id);
             }
 
-            if (!multi_unprintable && unprintable_ext != -1) ret[f_idx] = unprintable_ext;
-
+            // Same as the old 2-extruder drop when both sides were banned: nowhere to place it.
+            if (extruder_count > 0 && forbidden.size() >= extruder_count)
+                continue;
+            if (!forbidden.empty())
+                ret[f_idx].assign(forbidden.begin(), forbidden.end());
         }
         return ret;
     }
@@ -1049,7 +1093,7 @@ namespace Slic3r
         if (machine_filament_list.empty())
             throw FilamentGroupException(FilamentGroupException::EmptyAmsFilaments,"Empty ams filament in For-Match mode.");
 
-        std::map<int, int> unprintable_limit_indices; // key stores filament idx in used_filament, value stores unprintable extruder
+        std::unordered_map<int, std::vector<int>> unprintable_limit_indices; // key stores filament idx in used_filament, value stores unprintable extruder ids
         extract_unprintable_limit_indices(ctx.model_info.unprintable_filaments, used_filaments, unprintable_limit_indices);
         unprintable_limit_indices = rebuild_unprintables(used_filaments, unprintable_limit_indices);
 
@@ -1068,13 +1112,16 @@ namespace Slic3r
         std::vector<int>r_nodes(machine_filament_list.size());
         std::iota(r_nodes.begin(), r_nodes.end(), 0);
         std::vector<int>machine_filament_capacity(machine_filament_list.size(),l_nodes.size());
-        std::vector<int>extruder_filament_count(2, 0);
+        int max_extruder_id = 0;
+        for (const auto& machine_filament : machine_filament_list)
+            max_extruder_id = std::max(max_extruder_id, machine_filament.extruder_id);
+        std::vector<int> extruder_filament_count(max_extruder_id + 1, 0);
 
         auto is_extruder_filament_compatible = [&unprintable_limit_indices](int filament_idx, int extruder_id) {
             auto iter = unprintable_limit_indices.find(filament_idx);
-            if (iter != unprintable_limit_indices.end() && iter->second == extruder_id)
-                return false;
-            return true;
+            if (iter == unprintable_limit_indices.end())
+                return true;
+            return std::find(iter->second.begin(), iter->second.end(), extruder_id) == iter->second.end();
             };
 
         auto build_unlink_limits = [](const std::vector<int>& l_nodes, const std::vector<int>& r_nodes, const std::function<bool(int, int)>& can_link) {
@@ -1163,7 +1210,14 @@ namespace Slic3r
                     int score = candidate.second;
                     if (score == best_preference_score) {
                         int new_extruder_id = machine_filament_list[machine_filament].extruder_id;
-                        int new_gap = std::abs(extruder_filament_count[new_extruder_id] + 1 - extruder_filament_count[1 - new_extruder_id]);
+                        int min_c = std::numeric_limits<int>::max();
+                        int max_c = std::numeric_limits<int>::min();
+                        for (size_t eid = 0; eid < extruder_filament_count.size(); ++eid) {
+                            int c = extruder_filament_count[eid] + ((int)eid == new_extruder_id ? 1 : 0);
+                            min_c = std::min(min_c, c);
+                            max_c = std::max(max_c, c);
+                        }
+                        int new_gap = max_c - min_c;
 
                         // among equal-preference candidates, pick the one giving the most balanced load
                         if (new_gap < best_gap) {
@@ -1266,15 +1320,16 @@ namespace Slic3r
         std::iota(r_nodes.begin(), r_nodes.end(), 0);
         std::vector<int> machine_filament_capacity({int(used_filaments.size()), int(used_filaments.size())});
 
-        std::map<int, int> unprintable_limit_indices; // key stores filament idx in used_filament, value stores unprintable extruder
+        std::unordered_map<int, std::vector<int>> unprintable_limit_indices; // key stores filament idx in used_filament, value stores unprintable extruder ids
         extract_unprintable_limit_indices(ctx.model_info.unprintable_filaments, used_filaments, unprintable_limit_indices);
         unprintable_limit_indices = rebuild_unprintables(used_filaments, unprintable_limit_indices);
 
         std::unordered_map<int, std::vector<int>> unlink_limits(used_filaments.size());
         for (int i = 0; i < used_filaments.size(); i++) {
             auto iter = unprintable_limit_indices.find(i);
-            if (iter == unprintable_limit_indices.end() || iter->second < 0 || iter->second >= 2) continue;
-            unlink_limits[i].emplace_back(iter->second);
+            if (iter == unprintable_limit_indices.end())
+                continue;
+            unlink_limits[i] = iter->second;
         }
 
         MatchModeGroupSolver s(print_time_matrix, l_nodes, r_nodes, machine_filament_capacity, unlink_limits);
@@ -1324,6 +1379,25 @@ namespace Slic3r
     }
 
 
+    static void forbid_filaments_on_other_extruders(FilamentGroupContext& ctx, const std::vector<unsigned int>& used_filaments, const std::vector<int>& filament_extruder_map)
+    {
+        size_t extruder_count = ctx.model_info.unprintable_filaments.size();
+        for (const auto& nozzle : ctx.nozzle_info.nozzle_list)
+            if (nozzle.extruder_id >= 0)
+                extruder_count = std::max(extruder_count, static_cast<size_t>(nozzle.extruder_id + 1));
+        if (extruder_count == 0)
+            extruder_count = 1;
+        ctx.model_info.unprintable_filaments.resize(extruder_count);
+        for (auto fid : used_filaments) {
+            if (fid >= filament_extruder_map.size())
+                continue;
+            const int assigned = filament_extruder_map[fid];
+            for (size_t e = 0; e < extruder_count; ++e)
+                if (static_cast<int>(e) != assigned)
+                    ctx.model_info.unprintable_filaments[e].insert(static_cast<int>(fid));
+        }
+    }
+
     std::vector<int> calc_filament_group_for_match_multi_nozzle(const FilamentGroupContext& ctx)
     {
         FilamentGroup fg1(ctx);
@@ -1331,8 +1405,7 @@ namespace Slic3r
 
         FilamentGroupContext new_ctx = ctx;
         auto used_filaments = collect_sorted_used_filaments(ctx.model_info.layer_filaments);
-        for(size_t idx = 0; idx < used_filaments.size(); ++idx)
-            new_ctx.model_info.unprintable_filaments[1 - filament_extruder_map[used_filaments[idx]]].insert(used_filaments[idx]);
+        forbid_filaments_on_other_extruders(new_ctx, used_filaments, filament_extruder_map);
         new_ctx.machine_info.max_group_size.assign(new_ctx.machine_info.max_group_size.size(), std::numeric_limits<int>::max());
         FilamentGroup fg(new_ctx);
         return fg.calc_filament_group_for_flush();
@@ -1473,8 +1546,7 @@ namespace Slic3r
     {
         FilamentGroupContext new_ctx = ctx;
         auto used_filaments = collect_sorted_used_filaments(ctx.model_info.layer_filaments);
-        for(size_t idx = 0; idx < used_filaments.size(); ++idx)
-            new_ctx.model_info.unprintable_filaments[1 - filament_map_manual[used_filaments[idx]]].insert(used_filaments[idx]);
+        forbid_filaments_on_other_extruders(new_ctx, used_filaments, filament_map_manual);
 
         new_ctx.machine_info.max_group_size.assign(new_ctx.machine_info.max_group_size.size(), std::numeric_limits<int>::max());
         FilamentGroup fg(new_ctx);

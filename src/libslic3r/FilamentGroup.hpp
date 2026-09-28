@@ -94,6 +94,7 @@ namespace Slic3r
             std::vector<std::vector<FilamentGroupUtils::MachineFilamentInfo>> machine_filament_info;
             std::vector<bool> prefer_non_model_filament;
             int master_extruder_id;
+            bool use_master_extruder_preference = true;
         } machine_info;
 
         struct SpeedInfo{
@@ -176,7 +177,12 @@ namespace Slic3r
         std::vector<int> calc_group_by_kmedoids(int k, const std::vector<unsigned int>& used_filaments,
             const std::unordered_map<int, std::vector<int>>& unplaceable_limits, int* cost = nullptr);
 
-        std::map<int, int> rebuild_unprintables(const std::vector<unsigned int>& used_filaments, const std::map<int,int>& extruder_unprintables);
+        // Match-mode: used-filament index -> extruders that filament must not be assigned to.
+        // The 2-extruder original stored a single banned extruder (map<int,int>) and dropped the
+        // constraint if volume bans hit more than one extruder. N extruders can ban several and
+        // still leave a legal one, so this returns a list. An extruder is volume-banned only when
+        // every hotend on it is incompatible; a constraint that bans every extruder is dropped.
+        std::unordered_map<int, std::vector<int>> rebuild_unprintables(const std::vector<unsigned int>& used_filaments, const std::unordered_map<int, std::vector<int>>& extruder_unprintables);
         std::unordered_map<int, std::vector<int>> rebuild_nozzle_unprintables(const std::vector<unsigned int>& used_filaments, const std::unordered_map<int, std::vector<int>>& extruder_unprintables, const std::vector<int>& filament_volume_map);
 
         std::unordered_map<int, std::vector<int>> try_merge_filaments();

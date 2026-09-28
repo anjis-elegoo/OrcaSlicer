@@ -1,6 +1,7 @@
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/GCode/ToolOrdering.hpp"
 #include "libslic3r/GCodeReader.hpp"
 
 #include "test_helpers.hpp"
@@ -13,6 +14,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -23,6 +25,112 @@
 
 using namespace Slic3r;
 using namespace Slic3r::Test;
+
+TEST_CASE("Sequential printing restores one-to-one assignments when grouping is disabled", "[MultiFilament]")
+{
+    const bool grouped = GENERATE(false, true);
+    DynamicPrintConfig config = multifilament_config(2);
+    config.set_num_extruders(2);
+    config.set_deserialize_strict({
+        { "single_extruder_multi_material", false },
+        { "multi_extruder_multi_filament", true },
+        { "use_master_extruder_preference", false },
+        { "extruder_max_nozzle_count", "1,1" },
+        { "print_sequence", "by object" },
+        { "filament_map", "2,1" },
+        { "flush_volumes_matrix", "0,40,40,0,0,40,40,0" },
+        { "enable_prime_tower", false },
+        { "layer_height", 0.2 },
+        { "initial_layer_print_height", 0.2 },
+    });
+    config.set_key_value("filament_map_mode", new ConfigOptionEnum<FilamentMapMode>(FilamentMapMode::fmmManual));
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{
+        {{"extruder", 1}}, {{"extruder", 2}}};
+    Print print;
+    Model model;
+    init_print(std::vector<TriangleMesh>{cube(4), cube(4)}, print, model, config, &overrides);
+    config.set_key_value("multi_extruder_multi_filament", new ConfigOptionBool(grouped));
+    print.apply(model, config);
+    REQUIRE_FALSE(print.is_BBL_printer());
+    REQUIRE(print.objects().size() == 2);
+    REQUIRE(print.config().filament_map.values == std::vector<int>{2, 1});
+    print.process();
+
+    const std::vector<int> expected = grouped ? std::vector<int>{2, 1} : std::vector<int>{1, 2};
+    CHECK(print.config().filament_map.values == expected);
+    for (unsigned int fid = 0; fid < expected.size(); ++fid)
+        CHECK(get_extruder_index(print.config(), fid) == size_t(expected[fid] - 1));
+    for (const PrintObject* object : print.objects()) {
+        ToolOrdering ordering(*object, static_cast<unsigned int>(-1));
+        ordering.sort_and_build_data(*object, static_cast<unsigned int>(-1));
+        REQUIRE_FALSE(ordering.all_extruders().empty());
+        for (unsigned int fid : ordering.all_extruders()) {
+            const auto nozzle = ordering.get_layered_nozzle_group_result().get_nozzle_for_filament(fid, 0);
+            REQUIRE(nozzle.has_value());
+            CHECK(nozzle->extruder_id == expected[fid] - 1);
+        }
+    }
+}
+
+TEST_CASE("Type 2 tower uses the flush matrix of the assigned extruder", "[MultiFilament][WipeTower]")
+{
+    const int target_extruder = GENERATE(0, 1);
+    const bool priming = GENERATE(false, true);
+    auto tower_usage = [target_extruder, priming](double flush_volume) {
+        DynamicPrintConfig config = multifilament_config(3);
+        config.set_num_extruders(2);
+        config.set_deserialize_strict({
+            { "single_extruder_multi_material", false },
+            { "multi_extruder_multi_filament", true },
+            { "use_master_extruder_preference", false },
+            { "enable_prime_tower", true },
+            { "purge_in_prime_tower", true },
+            { "single_extruder_multi_material_priming", priming },
+            { "prime_volume", 30 },
+            { "wipe_tower_x", 50 },
+            { "wipe_tower_y", 50 },
+            { "layer_height", 0.2 },
+            { "initial_layer_print_height", 0.2 },
+            { "flush_multiplier", "1,1" },
+            { "filament_minimal_purge_on_wipe_tower", "10,10,10" },
+            { "flush_into_infill", false },
+            { "flush_into_objects", false },
+        });
+        config.set_key_value("wipe_tower_type", new ConfigOptionEnum<WipeTowerType>(WipeTowerType::Type2));
+        config.set_key_value("filament_map_mode", new ConfigOptionEnum<FilamentMapMode>(FilamentMapMode::fmmManual));
+        config.option<ConfigOptionInts>("filament_map")->values =
+            {target_extruder + 1, 2 - target_extruder, target_extruder + 1};
+        auto &matrix = config.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
+        matrix.assign(18, 40.0);
+        for (int eid = 0; eid < 2; ++eid)
+            for (int fid = 0; fid < 3; ++fid)
+                matrix[eid * 9 + fid * 3 + fid] = 0.;
+        matrix[target_extruder * 9 + 2] = flush_volume;
+        matrix[target_extruder * 9 + 6] = flush_volume;
+
+        const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{
+            {{"extruder", 1}}, {{"extruder", 2}}, {{"extruder", 3}}};
+        Print print;
+        Model model;
+        init_print(std::vector<TriangleMesh>{cube(4), cube(4), cube(4)}, print, model, config, &overrides);
+        print.apply(model, config);
+        print.process();
+        const auto &tower = print.wipe_tower_data();
+        REQUIRE_FALSE(tower.tool_changes.empty());
+        REQUIRE(tower.priming != nullptr);
+        double priming_length = 0.;
+        for (const auto &step : *tower.priming)
+            for (size_t i = 1; i < step.extrusions.size(); ++i)
+                if (step.extrusions[i].width > 0.f)
+                    priming_length += (step.extrusions[i].pos - step.extrusions[i - 1].pos).norm();
+        return std::make_pair(std::accumulate(tower.used_filament.begin(), tower.used_filament.end(), 0.0), priming_length);
+    };
+    const auto low = tower_usage(40.0);
+    const auto high = tower_usage(300.0);
+    CHECK(high.first > low.first);
+    if (priming)
+        CHECK(high.second > low.second);
+}
 
 // 0-based tool indices used by extrusions whose role comment contains `role` (needs gcode_comments).
 static std::set<int> tools_for_role(const std::string& gcode, const std::string& role)
