@@ -7321,7 +7321,7 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
     size_t nozzle_nums = get_printer_extruder_count();
     if (old_nozzle_nums != nozzle_nums) {
         std::vector<double>& f_multiplier = this->project_config.option<ConfigOptionFloats>("flush_multiplier")->values;
-        f_multiplier.resize(nozzle_nums, 1.f);
+        f_multiplier.resize(nozzle_nums, FullPrintConfig::defaults().flush_multiplier.get_at(0));
     }
 
     if (old_matrix.size() != num_filaments * num_filaments * nozzle_nums) {
