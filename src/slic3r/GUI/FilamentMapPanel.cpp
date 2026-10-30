@@ -151,7 +151,7 @@ void FilamentMapManualPanel::OnTimer(wxTimerEvent &)
         Layout();
         Fit();
         this->GetParent()->Layout();
-        this->GetParent()->Fit();
+        this->GetParent()->FitInside();
         for (auto *panel : m_extruder_panels)
             panel->Thaw();
         m_tips->Thaw();
@@ -254,7 +254,7 @@ void FilamentMapManualPanel::SyncPanelHeights()
 
     if (GetParent()) {
         GetParent()->Layout();
-        GetParent()->Fit();
+        GetParent()->FitInside();
     }
 }
 
