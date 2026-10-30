@@ -22,6 +22,7 @@
 #include <wx/gdicmn.h>
 #include <wx/dialog.h>
 #include <wx/settings.h>
+#include <wx/toplevel.h>
 #include "slic3r/GUI/FilamentMapPanel.hpp"
 #include "slic3r/GUI/FilamentGroupPopup.hpp"
 #include "slic3r/GUI/MainFrame.hpp"

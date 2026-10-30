@@ -358,7 +358,8 @@ wxString WipingDialog::BuildTableObjStr()
         auto fm = get_flush_volumes_matrix(raw_matrix_data, idx, nozzle_num);
         flush_matrixs.emplace_back(extract_physical_sub_matrix(fm, full_n, m_physical_indices));
     }
-    flush_multiplier.resize(nozzle_num, FullPrintConfig::defaults().flush_multiplier.get_at(0));
+    flush_multiplier.resize(nozzle_num, full_config.opt_bool("multi_extruder_multi_filament") ?
+                                            FullPrintConfig::defaults().flush_multiplier.get_at(0) : 1.);
 
     std::vector<std::vector<float>> default_matrixs;
     for (int idx = 0; idx < nozzle_num; ++idx) {
@@ -381,7 +382,7 @@ wxString WipingDialog::BuildTableObjStr()
             labels.push_back(into_u8(_L(DevPrinterConfigUtil::get_toolhead_display_name(pt, MAIN_EXTRUDER_ID, ToolHeadComponent::Extruder, ToolHeadNameCase::SentenceCase))));
         } else {
             for (int idx = 0; idx < nozzle_num; ++idx)
-                labels.push_back(into_u8(wxString::Format("%s %d", _L("Extruder"), idx + 1)));
+                labels.push_back(into_u8(wxString::Format(_L("Extruder %d"), idx + 1)));
         }
         obj["extruder_labels"] = labels;
     }

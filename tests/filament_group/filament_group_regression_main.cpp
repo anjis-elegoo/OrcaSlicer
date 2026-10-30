@@ -28,7 +28,10 @@
 #include <vector>
 #include <algorithm>
 #include <numeric>
+#include <utility>
+#include "libslic3r/FilamentGroupUtils.hpp"
 #include "libslic3r/MultiNozzleUtils.hpp"
+#include "libslic3r/PrintConfig.hpp"
 
 namespace fs = std::filesystem;
 using namespace Slic3r;
@@ -387,6 +390,32 @@ TEST_CASE("Match grouping assigns filaments to matching colors across four extru
     REQUIRE(result.size() == filament_count);
     for (int filament_id = 0; filament_id < filament_count; ++filament_id)
         CHECK(result[filament_id] == filament_id % extruder_count);
+}
+
+TEST_CASE("Flush grouping prefers fewer filaments on an empty extruder", "[FilamentGroup][Topology]")
+{
+    const std::vector<MultiNozzleUtils::NozzleInfo> nozzle_list = {
+        {"0.4", NozzleVolumeType::nvtStandard, 0, 0},
+        {"0.4", NozzleVolumeType::nvtStandard, 1, 1},
+    };
+    const std::vector<unsigned int> used_filaments = {0, 1, 2, 3, 4, 5};
+
+    FilamentGroupUtils::FilamentInfo red_pla;
+    red_pla.color = FilamentGroupUtils::Color(200, 10, 10);
+    red_pla.type = "PLA";
+    red_pla.is_support = false;
+    const std::vector<FilamentGroupUtils::FilamentInfo> used_filament_info(used_filaments.size(), red_pla);
+
+    // Extruder 1 is empty, extruder 2 holds the matching filament.
+    FilamentGroupUtils::MachineFilamentInfo loaded;
+    static_cast<FilamentGroupUtils::FilamentInfo&>(loaded) = red_pla;
+    loaded.extruder_id = 1;
+    loaded.is_extended = false;
+    const std::vector<std::vector<FilamentGroupUtils::MachineFilamentInfo>> machine_filament_info = {{}, {loaded}};
+
+    const std::vector<int> five_on_empty = {0, 0, 0, 0, 0, 1};
+    const std::vector<int> one_on_empty  = {0, 1, 1, 1, 1, 1};
+    CHECK(select_best_group_for_ams({five_on_empty, one_on_empty}, nozzle_list, used_filaments, used_filament_info, machine_filament_info) == one_on_empty);
 }
 
 TEST_CASE("Flush grouping uses the configured master when fewer filaments than extruders are needed", "[FilamentGroup][Topology]")

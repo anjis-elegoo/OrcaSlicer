@@ -427,7 +427,8 @@ void FilamentMapManualPanel::UpdateNozzleCountDisplay()
                 // TRN Nozzle counts: Std = standard flow, HF = high flow
                 title += " " + wxString::Format(_L("(Std: %d, HF: %d)"), standard_count, highflow_count);
             } else {
-                title += wxString::Format(" (%d hotend(s))", getExtruderNozzleCountTotal(preset_bundle, int(extruder_id)));
+                const int total = getExtruderNozzleCountTotal(preset_bundle, int(extruder_id));
+                title += " " + wxString::Format(_L_PLURAL("(%d hotend)", "(%d hotends)", total), total);
             }
         }
         m_extruder_panels[extruder_id]->UpdateLabel(title);

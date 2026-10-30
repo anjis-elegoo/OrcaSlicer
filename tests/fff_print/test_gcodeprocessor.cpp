@@ -690,6 +690,9 @@ void slice_cube_in_nozzle_area(const Vec2ds &nozzle_area, const Vec2d &center, G
         { "skirt_loops",               0 },
         { "brim_type",                 "no_brim" },
         { "layer_change_gcode",        "G92 E0\n" }, // validate() relative-E reset
+        // A manual filament map is honoured only with grouping enabled.
+        { "single_extruder_multi_material", false },
+        { "multi_extruder_multi_filament",  true },
         { "filament_map_mode",         "Manual" },
         { "filament_map",              filament_1_nozzle },
         { "filament_printable",        -1 },

@@ -21807,7 +21807,9 @@ void Plater::update_flush_volume_matrix(size_t old_nozzle_size, size_t new_nozzl
             set_flush_volumes_matrix(project_config->option<ConfigOptionFloats>("flush_volumes_matrix")->values, flush_volume_mtx, -1, new_nozzle_size);
         }
         std::vector<double> flush_multipliers = project_config->option<ConfigOptionFloats>("flush_multiplier")->values;
-        flush_multipliers.resize(nozzle_nums, 1.f);
+        flush_multipliers.resize(nozzle_nums,
+                                 wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_bool("multi_extruder_multi_filament") ?
+                                     FullPrintConfig::defaults().flush_multiplier.get_at(0) : 1.);
         project_config->option<ConfigOptionFloats>("flush_multiplier")->values = flush_multipliers;
     }
     else if (old_nozzle_size > new_nozzle_size) {
