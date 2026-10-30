@@ -5,6 +5,7 @@
 #include "Widgets/Label.hpp"
 #include "I18N.hpp"
 #include "GUI_App.hpp"
+#include "GUI_Utils.hpp"
 #include "CapsuleButton.hpp"
 #include "MsgDialog.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -17,8 +18,10 @@
 #include <wx/tglbtn.h>
 #include <wx/event.h>
 #include <numeric>
+#include <algorithm>
 #include <wx/gdicmn.h>
 #include <wx/dialog.h>
+#include <wx/settings.h>
 #include "slic3r/GUI/FilamentMapPanel.hpp"
 #include "slic3r/GUI/FilamentGroupPopup.hpp"
 #include "slic3r/GUI/MainFrame.hpp"
@@ -225,16 +228,13 @@ FilamentMapDialog::FilamentMapDialog(wxWindow                       *parent,
                                      bool                            machine_synced,
                                      bool                            show_default,
                                      bool                            with_checkbox)
-    : wxDialog(parent, wxID_ANY, _L("Filament grouping"), wxDefaultPosition, wxDefaultSize,wxDEFAULT_DIALOG_STYLE)
+    : wxDialog(parent, wxID_ANY, _L("Filament grouping"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
     , m_filament_color(filament_color)
     , m_filament_type(filament_type)
     , m_filament_map(filament_map)
     , m_filament_volume_map(filament_volume_map)
 {
     SetBackgroundColour(*wxWHITE);
-
-    SetMinSize(wxSize(FromDIP(580), -1));
-    SetMaxSize(wxSize(FromDIP(580), -1));
 
     // Orca: when a filament track switch is ready, every AMS filament reaches both nozzles, so the
     // Match/Convenience sub-mode is dropped and Auto is presented purely as a filament-saving mode.
@@ -275,6 +275,10 @@ FilamentMapDialog::FilamentMapDialog(wxWindow                       *parent,
     main_sizer->AddSpacer(FromDIP(24));
 
     auto            panel_sizer       = new wxBoxSizer(wxHORIZONTAL);
+    // Keep the action buttons reachable when many extruder groups exceed the screen height.
+    m_panel_scroll = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
+    m_panel_scroll->SetScrollRate(0, FromDIP(10));
+    m_panel_scroll->SetMinSize(wxSize(FromDIP(580) + wxSystemSettings::GetMetric(wxSYS_VSCROLL_X, this), FromDIP(100)));
 
     // Orca: fall back to the saving mode whenever Match is unavailable, which now also covers the
     // filament-track-switch-ready case (auto_match_available folds in !m_fila_switch_ready).
@@ -282,7 +286,7 @@ FilamentMapDialog::FilamentMapDialog(wxWindow                       *parent,
         mode == fmmAutoForMatch && !auto_match_available ? fmmAutoForFlush :
         mode;
 
-    m_manual_map_panel                = new FilamentMapManualPanel(this, m_filament_color, m_filament_type, filaments, filament_map, filament_volume_map);
+    m_manual_map_panel                = new FilamentMapManualPanel(m_panel_scroll, m_filament_color, m_filament_type, filaments, filament_map, filament_volume_map);
     // A manual grouping can point filaments at a nozzle volume the extruder does not physically
     // carry; the panel's validation timer reports that here so OK is gated on a printable map.
     m_manual_map_panel->Bind(wxEVT_INVALID_MANUAL_MAP, [this](wxCommandEvent &event) {
@@ -296,16 +300,17 @@ FilamentMapDialog::FilamentMapDialog(wxWindow                       *parent,
             if (m_ok_btn->IsEnabled()) { m_ok_btn->Disable(); }
         }
     });
-    m_auto_map_panel                  = new FilamentMapAutoPanel(this, default_auto_mode, auto_match_available);
+    m_auto_map_panel                  = new FilamentMapAutoPanel(m_panel_scroll, default_auto_mode, auto_match_available);
     if (show_default)
-        m_default_map_panel = new FilamentMapDefaultPanel(this);
+        m_default_map_panel = new FilamentMapDefaultPanel(m_panel_scroll);
     else
         m_default_map_panel = nullptr;
 
-    panel_sizer->Add(m_manual_map_panel, 0, wxEXPAND);
-    panel_sizer->Add(m_auto_map_panel, 0, wxEXPAND);
-    if (show_default) panel_sizer->Add(m_default_map_panel, 0, wxEXPAND);
-    main_sizer->Add(panel_sizer, 0, wxEXPAND);
+    panel_sizer->Add(m_manual_map_panel, 1, wxEXPAND);
+    panel_sizer->Add(m_auto_map_panel, 1, wxEXPAND);
+    if (show_default) panel_sizer->Add(m_default_map_panel, 1, wxEXPAND);
+    m_panel_scroll->SetSizer(panel_sizer);
+    main_sizer->Add(m_panel_scroll, 1, wxEXPAND);
 
     // Smart filament section, shown only in filament-saving (flush) mode when the switch is ready.
     if (m_fila_switch_ready) {
@@ -363,11 +368,8 @@ FilamentMapDialog::FilamentMapDialog(wxWindow                       *parent,
     m_manual_btn->Bind(wxEVT_BUTTON, &FilamentMapDialog::on_switch_mode, this);
     if (show_default) m_default_btn->Bind(wxEVT_BUTTON, &FilamentMapDialog::on_switch_mode, this);
 
-    SetSizer(main_sizer);
-    Layout();
-    Fit();
+    SetSizerAndFit(main_sizer);
 
-    CenterOnParent();
     wxGetApp().UpdateDlgDarkUI(this);
 }
 
@@ -456,8 +458,12 @@ void FilamentMapDialog::update_panel_status(PageType page)
     if (m_smart_filament)
         m_smart_filament->Show(get_mode() == fmmAutoForFlush);
 
+    wxSize size = GetSizer()->CalcMin();
+    size.y += std::max(0, m_panel_scroll->GetSizer()->CalcMin().y - m_panel_scroll->GetMinSize().y);
+    fit_in_display(*this, ClientToWindowSize(size));
     Layout();
-    Fit();
+    m_panel_scroll->FitInside();
+    CenterOnParent();
 }
 
 void FilamentMapDialog::on_switch_mode(wxCommandEvent &event)
