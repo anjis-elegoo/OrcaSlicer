@@ -3903,7 +3903,7 @@ void GCodeViewer::render_legend_color_arr_recommen(float window_padding)
             if (m_is_bbl_printer && m_extruder_filaments.size() == 2)
                 imgui.text(extruder_id == 0 ? _u8L("Left nozzle") : _u8L("Right nozzle"));
             else
-                imgui.text(_u8L("Extruder") + " " + std::to_string(extruder_id + 1));
+                imgui.text(into_u8(wxString::Format(_L("Extruder %d"), int(extruder_id) + 1)));
             ImGui::Dummy({window_padding, window_padding});
             int index = 1;
             for (const auto &extruder_filament : m_extruder_filaments[extruder_id]) {
