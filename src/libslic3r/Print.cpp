@@ -5493,7 +5493,7 @@ void Print::_make_wipe_tower()
                                 : m_config.flush_multiplier.get_at(extruder_id);
                             volume_to_purge *= flush_multiplier;
                             volume_to_purge = layer_tools.wiping_extrusions().mark_wiping_extrusions(
-                                *this, current_filament_id, filament_id, volume_to_purge);
+                                *this, prev_nozzle_filament, filament_id, volume_to_purge);
                         }
                         nozzle_recorder.set_nozzle_status(nozzle_id, filament_id, extruder_id);
                     }
