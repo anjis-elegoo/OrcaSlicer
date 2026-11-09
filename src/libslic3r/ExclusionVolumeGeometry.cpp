@@ -128,8 +128,9 @@ std::vector<size_t> bed_exclusion_physical_extruders(
 
     std::vector<size_t> result;
     const auto grouping = print.get_layered_nozzle_group_result();
+    const bool grouping_enabled = print.is_BBL_printer() || print.config().multi_extruder_multi_filament.value;
     const bool automatic_mapping_resolved =
-        !is_auto_filament_map_mode(print.get_filament_map_mode()) || !print.is_BBL_printer() ||
+        !is_auto_filament_map_mode(print.get_filament_map_mode()) || !grouping_enabled ||
         print.get_nozzle_group_result() != nullptr;
     // A mixed filament prints with its component filaments.
     const std::vector<unsigned int> physical_filament_ids = expand_mixed_filaments(
@@ -147,7 +148,7 @@ std::vector<size_t> bed_exclusion_physical_extruders(
         }
 
         const int resolved = bed_exclusion_extruder_for_filament(
-            filament_id, print.get_filament_maps(), print.get_filament_map_mode(), print.is_BBL_printer(),
+            filament_id, print.get_filament_maps(), print.get_filament_map_mode(), grouping_enabled,
             automatic_mapping_resolved, physical_extruder_count);
         if (resolved >= 0)
             result.emplace_back(size_t(resolved));

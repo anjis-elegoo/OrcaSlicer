@@ -1864,6 +1864,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionStrings,             extruder_nozzle_stats))
     ((ConfigOptionInts,                printer_extruder_id))
     ((ConfigOptionInt,                 master_extruder_id))
+    ((ConfigOptionBool,                use_master_extruder_preference))
+    ((ConfigOptionBool,                multi_extruder_multi_filament))
     ((ConfigOptionStrings,             printer_extruder_variant))
 
 
@@ -2570,10 +2572,10 @@ std::vector<BedExcludeRegion> get_bed_excluded_regions(const PrintConfig &cfg, s
 std::vector<std::vector<BedExcludeRegion>> get_bed_excluded_regions_by_extruder(const DynamicPrintConfig &cfg);
 std::vector<std::vector<BedExcludeRegion>> get_bed_excluded_regions_by_extruder(const PrintConfig &cfg);
 // Resolve the nozzle whose exclusion regions apply to a filament. Filament
-// and return ids are 0-based. Returns -1 while Bambu automatic grouping has
+// and return ids are 0-based. Returns -1 while automatic filament grouping has
 // no concrete assignment.
 int bed_exclusion_extruder_for_filament(size_t filament_id, const std::vector<int> &configured_map,
-                                        FilamentMapMode map_mode, bool is_bambu, bool automatic_map_resolved,
+                                        FilamentMapMode map_mode, bool grouping_enabled, bool automatic_map_resolved,
                                         size_t extruder_count);
 bool is_bed_exclusion_volume_syntax(const std::string &value);
 bool is_valid_bed_exclude_volumes_string(const std::string &value, double printable_height);
