@@ -1132,6 +1132,11 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         Vec2f tool_change_start_pos = start_pos;
         if (tcr.is_tool_change)
             tool_change_start_pos = tcr.tool_change_start_pos;
+        if (!tcr.side_scrape_path.empty()) {
+            if ((start_pos - tool_change_start_pos).norm() < EPSILON)
+                start_pos = tcr.side_scrape_path.front().head<2>();
+            tool_change_start_pos = tcr.side_scrape_path.front().head<2>();
+        }
         if (!tcr.priming) {
             start_pos = transform_wt_pt(start_pos);
             end_pos   = transform_wt_pt(end_pos);
@@ -1571,7 +1576,42 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
             extra_unretract = gcodegen.m_config.filament_tower_interface_pre_extrusion_length.get_at(tcr.new_tool);
         else if (is_petg_pre_extrusion)
             extra_unretract = 2.f;
-        std::string toolchange_unretract_str = (extra_unretract > 0.f) ? gcodegen.unretract(extra_unretract) : gcodegen.unretract();
+        std::string toolchange_unretract_str;
+        if (tcr.side_scrape_path.empty()) {
+            toolchange_unretract_str = (extra_unretract > 0.f) ? gcodegen.unretract(extra_unretract) : gcodegen.unretract();
+        } else {
+            GCodeWriter &writer = gcodegen.writer();
+            // Remove the Z hop at the outside entry, but keep the filament retracted until
+            // the dry scrape returns to the original purge start.
+            toolchange_unretract_str = writer.unlift() + writer.retract();
+            toolchange_unretract_str += "; SIDE_SCRAPE_START\n";
+            const double saved_speed = writer.get_current_speed();
+            for (const Vec3f &point : tcr.side_scrape_path) {
+                const Vec2d xy = gcodegen.point_to_gcode(wipe_tower_point_to_object_point(
+                    gcodegen, transform_wt_pt(point.head<2>()) + plate_origin_2d));
+                const Vec3d target(xy.x(), xy.y(), point.z());
+                const Vec3d delta = target - writer.get_position();
+                const double distance = delta.norm();
+                if (distance < EPSILON)
+                    continue;
+                double speed = std::min(m_print_config->prime_tower_side_scrape_speed.value,
+                                        m_print_config->travel_speed.get_at(new_extruder_id));
+                const Vec3d axis_limits(m_print_config->machine_max_speed_x.get_at(0),
+                                        m_print_config->machine_max_speed_y.get_at(0),
+                                        m_print_config->machine_max_speed_z.get_at(0));
+                for (int axis = 0; axis < 3; ++axis)
+                    if (axis_limits[axis] > 0. && std::abs(delta[axis]) > EPSILON)
+                        speed = std::min(speed, axis_limits[axis] * distance / std::abs(delta[axis]));
+                const double z_speed = m_print_config->travel_speed_z.get_at(new_extruder_id);
+                if (z_speed > 0. && std::abs(delta.z()) > EPSILON)
+                    speed = std::min(speed, z_speed * distance / std::abs(delta.z()));
+                toolchange_unretract_str += writer.set_speed(speed * 60.);
+                toolchange_unretract_str += writer.extrude_to_xyz(target, 0., "Side scrape", true);
+            }
+            toolchange_unretract_str += "; SIDE_SCRAPE_END\n";
+            toolchange_unretract_str += writer.unretract(extra_unretract);
+            toolchange_unretract_str += writer.set_speed(saved_speed);
+        }
         check_add_eol(toolchange_unretract_str);
 
         gcodegen.placeholder_parser().set("current_extruder", new_filament_id);
@@ -1616,7 +1656,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
         // Orca: the custom change_filament_gcode lifts to the object layer height and the unretract
         // de-hops back to it, so every tower extrusion emitted after it (purge moves, and the wall
         // when it prints after the toolchange) would float above the compacted tower. Descend first.
-        if (compacted_below_object) {
+        if (compacted_below_object && tcr.side_scrape_path.empty()) {
             std::string z_descend = gcodegen.writer().travel_to_z(z, "Descend to compacted wipe tower z (no sparse layers)");
             check_add_eol(z_descend);
             start_filament_gcode_str += z_descend;

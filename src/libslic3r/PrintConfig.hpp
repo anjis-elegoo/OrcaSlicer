@@ -603,6 +603,8 @@ enum CounterboreHoleBridgingOption {
     chbNone, chbBridges, chbFilled
 };
 
+enum class SideScrapeFace { FrontBack, LeftRight };
+
  enum WipeTowerWallType {
      wtwRectangle = 0,
      wtwCone,
@@ -828,6 +830,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(CounterboreHoleBridgingOption)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(PrintHostType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(AuthorizationType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerWallType)
+CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(SideScrapeFace)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(PerimeterGeneratorType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(ToolChangeOrderingType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(PowerLossRecoveryMode)
@@ -2110,6 +2113,14 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionPercent,            prime_tower_infill_gap))
     ((ConfigOptionBool,               prime_tower_skip_points))
     ((ConfigOptionBool,               prime_tower_flat_ironing))
+    ((ConfigOptionBool, prime_tower_side_scrape))
+    ((ConfigOptionEnum<SideScrapeFace>, prime_tower_side_scrape_face))
+    ((ConfigOptionFloat, prime_tower_side_scrape_length))
+    ((ConfigOptionFloat, prime_tower_side_scrape_height))
+    ((ConfigOptionFloat, prime_tower_side_scrape_speed))
+    ((ConfigOptionFloat, prime_tower_side_scrape_wall_gap))
+    ((ConfigOptionFloat, prime_tower_side_scrape_point_spacing))
+    ((ConfigOptionFloat, prime_tower_side_scrape_along_length))
     ((ConfigOptionBool,               enable_tower_interface_features))
     ((ConfigOptionBool,               enable_tower_interface_cooldown_during_tower))
     ((ConfigOptionFloat,              wipe_tower_bridging))

@@ -178,6 +178,9 @@ public:
 		// Orca: set by WipeTower2 (non-BBL tower) to force a travel to the tower even when the
 		// previous position is unknown; read by WipeTowerIntegration::append_tcr2 (GCode.cpp).
 		bool force_travel = false;
+
+        // Added after tower blocks are merged. XY is tower-local; Z is the actual tower height.
+        std::vector<Vec3f> side_scrape_path;
 	};
 
     struct box_coordinates
@@ -451,6 +454,7 @@ public:
     int get_wall_filament_for_all_layer();
 	// for generate new wipe tower
     void generate_new(std::vector<std::vector<WipeTower::ToolChangeResult>> &result);
+    void add_side_scrapes(const PrintConfig &config, std::vector<std::vector<ToolChangeResult>> &result) const;
 
 	void plan_tower_new();
 	void generate_wipe_tower_blocks(bool add_solid_flag);
@@ -491,6 +495,7 @@ private:
     int    m_slice_used_filaments      = 0;
     int    m_wrapping_detection_layers = 0;
     bool   m_enable_wrapping_detection = false;
+    bool   m_enable_side_scrape = false;
 	bool   m_enable_timelapse_print = false;
 	bool   m_semm               = true; // Are we using a single extruder multimaterial printer?
     Vec2f  m_wipe_tower_pos; 			// Left front corner of the wipe tower in mm.
@@ -707,6 +712,12 @@ private:
 // tower keeps following the object even though the option is on. Tower planning, G-code emission and
 // the clearance validator all ask this single question, so none of them can compact on its own.
 bool wipe_tower_sparse_layers_skipped(const PrintConfig &config);
+
+/** @brief Plan a dry scrape on a straight wall, outside all wall sections crossed by the descent.
+ *  @return Tower-local XYZ points, or an empty path when no selected wall is safe.
+ */
+std::vector<Vec3f> plan_wipe_tower_side_scrape(const PrintConfig &config, const Polylines &wall,
+                                             const Polylines &obstacles, float top_z, float line_width, size_t sequence);
 
 // A planned layer prints no tower at all when its only toolchange keeps the same filament.
 bool wipe_tower_layer_is_sparse(const std::vector<WipeTower::ToolChangeResult> &layer_tool_changes);

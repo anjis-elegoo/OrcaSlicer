@@ -549,6 +549,14 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "wipe_tower_type"
             || opt_key == "prime_tower_skip_points"
             || opt_key == "prime_tower_flat_ironing"
+            || opt_key == "prime_tower_side_scrape"
+            || opt_key == "prime_tower_side_scrape_face"
+            || opt_key == "prime_tower_side_scrape_length"
+            || opt_key == "prime_tower_side_scrape_height"
+            || opt_key == "prime_tower_side_scrape_speed"
+            || opt_key == "prime_tower_side_scrape_wall_gap"
+            || opt_key == "prime_tower_side_scrape_point_spacing"
+            || opt_key == "prime_tower_side_scrape_along_length"
             || opt_key == "enable_tower_interface_features"
             || opt_key == "first_layer_print_sequence"
             || opt_key == "other_layers_print_sequence"
@@ -1234,7 +1242,7 @@ double compacted_tower_footprint_padding(const PrintConfig &config, double brim_
     // lines, so the deposited material reaches half a line width further still. Allowing a line width
     // per side covers both, which is what keeps an estimated footprint enclosing the real one and the
     // pre-slice check stricter than the precise one.
-    return std::max(0., brim_width) + 2. * config.nozzle_diameter.get_at(0);
+    return std::max(0., brim_width) + 2. * config.nozzle_diameter.get_at(0) + wipe_tower_side_scrape_margin(config);
 }
 
 Polygons compacted_wipe_tower_rings(const CompactedTowerZone &zone, bool any_body_tier)
@@ -1710,6 +1718,12 @@ static StringObjectException layered_print_cleareance_valid(const Print &print, 
         base.rotate(Geometry::deg2rad(a));
         base.translate(Point(scale_(x), scale_(y)));
         tower_polys_estimated = offset(base, float(scale_(brim_width)));
+    }
+    const double scrape_margin = wipe_tower_side_scrape_margin(config);
+    if (scrape_margin > 0.) {
+        tower_polys_checked = offset(tower_polys_checked, float(scale_(scrape_margin)));
+        if (!intersection(convex_hulls_other, tower_polys_checked).empty())
+            return {L("The prime tower side-scraping area overlaps another object. Move the tower or reduce the scraping length.")};
     }
     // Object proximity stays a body-only warning: brim near-misses would newly warn on
     // many setups that print fine.
@@ -5248,6 +5262,7 @@ void Print::_make_wipe_tower()
     const unsigned int number_of_extruders = (unsigned int)(m_config.filament_colour.values.size());
 
     const bool is_wipe_tower_type2 = this->wipe_tower_type() == WipeTowerType::Type2;
+    const bool side_scrape_enabled = !is_wipe_tower_type2 && m_config.prime_tower_side_scrape.value;
     // Let the ToolOrdering class know there will be initial priming extrusions at the start of the print.
     m_wipe_tower_data.tool_ordering = ToolOrdering(*this, (unsigned int) -1, is_wipe_tower_type2);
     m_wipe_tower_data.tool_ordering.sort_and_build_data(*this, (unsigned int)-1, is_wipe_tower_type2);
@@ -5458,6 +5473,8 @@ void Print::_make_wipe_tower()
         // Generate the wipe tower layers.
         m_wipe_tower_data.tool_changes.reserve(m_wipe_tower_data.tool_ordering.layer_tools().size());
         wipe_tower.generate_new(m_wipe_tower_data.tool_changes);
+        if (side_scrape_enabled)
+            wipe_tower.add_side_scrapes(m_config, m_wipe_tower_data.tool_changes);
         m_wipe_tower_data.depth      = wipe_tower.get_depth();
         m_wipe_tower_data.width      = wipe_tower.width();
         m_wipe_tower_data.brim_width = wipe_tower.get_brim_width();
@@ -5699,6 +5716,37 @@ void Print::_make_wipe_tower()
         // The cutter/purge corner is a physical obstacle — the brim must stay out like the body.
         if (!intersection(get_bed_excluded_area(m_config), Polygons{footprint}).empty())
             throw Slic3r::SlicingError(L("Prime tower is too close to an exclusion area, and collisions will be caused.\n"));
+    }
+
+    if (side_scrape_enabled) {
+        Polylines strokes;
+        const float angle = float(Geometry::deg2rad(m_config.wipe_tower_rotation_angle.value));
+        const Vec2f anchor(float(m_config.wipe_tower_x.get_at(m_plate_index)), float(m_config.wipe_tower_y.get_at(m_plate_index)));
+        for (const auto &layer : m_wipe_tower_data.tool_changes) {
+            for (const WipeTower::ToolChangeResult &tcr : layer) {
+                if (tcr.side_scrape_path.empty())
+                    continue;
+                Polyline stroke;
+                for (const Vec3f &point : tcr.side_scrape_path) {
+                    const Vec2f xy = Eigen::Rotation2Df(angle) * point.head<2>() + anchor + m_wipe_tower_data.rib_offset;
+                    stroke.points.emplace_back(scale_(xy.x()), scale_(xy.y()));
+                }
+                strokes.push_back(std::move(stroke));
+            }
+        }
+        const Polygons swept = offset(strokes, float(scale_(0.5 * MAX_OUTER_NOZZLE_DIAMETER)));
+        if (!diff(swept, get_extruder_shared_printable_polygon()).empty() ||
+            !intersection(swept, get_bed_excluded_area(m_config)).empty())
+            throw SlicingError(L("The prime tower side-scraping path leaves the printable area or enters an exclusion area."));
+        const Point plate_shift = Point::new_scale(get_plate_origin().x(), get_plate_origin().y());
+        for (const PrintObject *object : m_objects) {
+            for (const PrintInstance &instance : object->instances()) {
+                Polygon hull = compacted_tower_print_instance_hull(*object, instance);
+                hull.translate(-plate_shift);
+                if (!intersection(swept, Polygons{hull}).empty())
+                    throw SlicingError(L("The prime tower side-scraping path overlaps another object. Move the tower or reduce the scraping length."));
+            }
+        }
     }
 }
 

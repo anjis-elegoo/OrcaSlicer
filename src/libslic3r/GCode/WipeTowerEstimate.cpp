@@ -11,6 +11,7 @@
 #include "../FilamentMixer.hpp"
 #include "../Point.hpp"
 #include "../PrintConfig.hpp"
+#include "../Print.hpp"
 #include "../libslic3r.h"
 
 #include <algorithm>
@@ -70,6 +71,16 @@ WipeTowerType resolve_wipe_tower_type(const ConfigBase &config)
     // DynamicConfig built from presets holds ConfigOptionEnumGeneric, and both answer getInt().
     const ConfigOption *type = option_of(config, "wipe_tower_type");
     return type != nullptr ? WipeTowerType(type->getInt()) : WipeTowerType::Type2;
+}
+
+double wipe_tower_side_scrape_margin(const ConfigBase &config)
+{
+    const ConfigOption *enabled = option_of(config, "prime_tower_side_scrape");
+    if (enabled == nullptr || !enabled->getBool() || resolve_wipe_tower_type(config) != WipeTowerType::Type1)
+        return 0.;
+    // Include the nozzle's outer radius; its centerline alone is not a collision envelope.
+    return option_of(config, "prime_tower_side_scrape_length")->getFloat() +
+           option_of(config, "prime_tower_side_scrape_wall_gap")->getFloat() + 0.5 * MAX_OUTER_NOZZLE_DIAMETER;
 }
 
 Polygon estimate_wipe_tower_first_layer_outline(const ConfigBase &config, WipeTowerType tower_type, double width, double depth, double height)

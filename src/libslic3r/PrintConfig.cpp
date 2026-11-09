@@ -717,6 +717,12 @@ static const t_config_enum_values s_keys_map_WipeTowerWallType{
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WipeTowerWallType)
 
+static const t_config_enum_values s_keys_map_SideScrapeFace{
+    {"front_back", int(SideScrapeFace::FrontBack)},
+    {"left_right", int(SideScrapeFace::LeftRight)},
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SideScrapeFace)
+
 static const t_config_enum_values s_keys_map_ExtruderType = {
     { "Direct Drive",   etDirectDrive },
     { "Bowden",        etBowden }
@@ -8470,6 +8476,83 @@ void PrintConfigDef::init_fff_params()
     def      = this->add("prime_tower_flat_ironing", coBool);
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("prime_tower_side_scrape", coBool);
+    def->label = L("Side scrape after nozzle change");
+    def->category = L("Prime tower");
+    def->tooltip = L("Remove ooze from the outside of the nozzle against a Type 1 prime tower after a nozzle or extruder change. Requires continuous tower walls with Skip points disabled. No material is extruded during scraping.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("prime_tower_side_scrape_face", coEnum);
+    def->label = L("Side scrape walls");
+    def->category = L("Prime tower");
+    def->tooltip = L("Choose the pair of tower walls used for scraping. Directions are relative to the tower before rotation.");
+    def->enum_keys_map = &ConfigOptionEnum<SideScrapeFace>::get_enum_values();
+    def->enum_values = {"front_back", "left_right"};
+    def->enum_labels = {L("Front and back"), L("Left and right")};
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<SideScrapeFace>(SideScrapeFace::FrontBack));
+
+    def = this->add("prime_tower_side_scrape_length", coFloat);
+    def->label = L("Side scrape length");
+    def->category = L("Prime tower");
+    def->tooltip = L("Horizontal distance of the diagonal scraping move toward the wall.");
+    def->sidetext = L("mm");
+    def->min = 0.1;
+    def->max = 20;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(2));
+
+    def = this->add("prime_tower_side_scrape_height", coFloat);
+    def->label = L("Side scrape descent");
+    def->category = L("Prime tower");
+    def->tooltip = L("Distance below the tower top at which the diagonal scraping move starts. Scraping is skipped until the tower is tall enough.");
+    def->sidetext = L("mm");
+    def->min = 0.1;
+    def->max = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.5));
+
+    def = this->add("prime_tower_side_scrape_speed", coFloat);
+    def->label = L("Side scrape speed");
+    def->category = L("Prime tower");
+    def->tooltip = L("Requested scraping speed, limited by the configured travel and axis speed limits.");
+    def->sidetext = L("mm/s");
+    def->min = 1;
+    def->max = 2000;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(50));
+
+    def = this->add("prime_tower_side_scrape_wall_gap", coFloat);
+    def->label = L("Side scrape wall gap");
+    def->category = L("Prime tower");
+    def->tooltip = L("Distance between the nozzle center and the outer surface of the tower wall.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.2));
+
+    def = this->add("prime_tower_side_scrape_point_spacing", coFloat);
+    def->label = L("Side scrape point spacing");
+    def->category = L("Prime tower");
+    def->tooltip = L("Spacing between successive scraping start points along the wall.");
+    def->sidetext = L("mm");
+    def->min = 0.5;
+    def->max = 50;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1));
+
+    def = this->add("prime_tower_side_scrape_along_length", coFloat);
+    def->label = L("Side scrape along-wall length");
+    def->category = L("Prime tower");
+    def->tooltip = L("Maximum distance traveled along the wall after the diagonal scraping move, shortened to fit the available straight wall.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 50;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(2));
 
     def = this->add("enable_tower_interface_features", coBool);
     def->label = L("Enable tower interface features");

@@ -4068,7 +4068,7 @@ arrangement::ArrangePolygon PartPlate::estimate_wipe_tower_polygon(const Dynamic
 	float depth = wt_size(1);
 	// Resolved brim, not the raw option: "Auto" (-1) would yield a margin of 0 and let the
 	// clamp put the brim off the bed. Matches set_default_wipe_tower_pos_for_plate.
-	float wp_brim_width = float(footprint.brim_width);
+	float wp_brim_width = float(footprint.brim_width + wipe_tower_side_scrape_margin(config));
 	// A Type2 stabilization cone bulges past the body box like a brim does - fold its worst-axis
 	// bulge into the same margin.
 	const BoundingBox outline = get_extents(estimate_wipe_tower_first_layer_outline(config, resolve_wipe_tower_type(config), w, depth, wt_size.z()));
@@ -4094,8 +4094,8 @@ arrangement::ArrangePolygon PartPlate::estimate_wipe_tower_polygon(const Dynamic
 	const bool  replace_y = y < margin - tol || y > y_hi + tol;
 	x = replace_x ? std::clamp(x, x_lo_c, x_hi_c) : std::clamp(x, margin, x_hi);
 	y = replace_y ? std::clamp(y, y_lo_c, y_hi_c) : std::clamp(y, margin, y_hi);
-	if (relocation != nullptr && (replace_x || replace_y)) {
-		relocation->moved = true;
+	if (relocation != nullptr && (replace_x || replace_y || wipe_tower_side_scrape_margin(config) > 0.)) {
+		relocation->moved = replace_x || replace_y;
 		// The footprint keeps clear of every object and its brim, and turns about its anchor
 		// as the tower does.
 		Polygon tower({ {scaled(-wp_brim_width), scaled(-wp_brim_width)},
@@ -4118,6 +4118,7 @@ arrangement::ArrangePolygon PartPlate::estimate_wipe_tower_polygon(const Dynamic
 			if (clear) {
 				x = static_cast<float>(unscaled(clear->x()));
 				y = static_cast<float>(unscaled(clear->y()));
+				relocation->moved = true;
 			} else {
 				relocation->overlaps_objects = true;
 			}
@@ -6384,7 +6385,7 @@ void PartPlateList::set_default_wipe_tower_pos_for_plate(int plate_idx, bool ini
     Vec3d wipe_tower_size(footprint.width, footprint.depth, footprint.height);
 
     // Brim-aware margin: the brim extends outward from the tower position.
-    const float brim_width = float(footprint.brim_width);
+    const float brim_width = float(footprint.brim_width + wipe_tower_side_scrape_margin(full_config));
     const float margin     = WIPE_TOWER_AUTO_MARGIN + brim_width;
 
     // clamp wipe tower position within plate boundaries

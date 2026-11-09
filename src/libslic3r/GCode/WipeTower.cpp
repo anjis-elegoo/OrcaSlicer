@@ -36,6 +36,8 @@
 #include "Triangulation.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/Exception.hpp"
+#include "libslic3r/I18N.hpp"
 
 
 namespace Slic3r
@@ -49,6 +51,143 @@ static constexpr int    arc_fit_size = 20;
 #define SCALED_WIPE_TOWER_RESOLUTION (WIPE_TOWER_RESOLUTION / SCALING_FACTOR)
 enum class LimitFlow { None, LimitPrintFlow, LimitRammingFlow, LimitRammingFlowNC};//nc:nozzle change
 static const std::map<float, float> nozzle_diameter_to_nozzle_change_width{{0.2f, 0.5f}, {0.4f, 1.0f}, {0.6f, 1.2f}, {0.8f, 1.4f}};
+
+
+// Extreme wall coordinate over an along-wall interval, including intersections at its ends.
+// Clipping each edge avoids sampling past a narrow rib or a chamfer corner.
+static double side_scrape_wall_extreme(const Polylines &walls, int across, double lo, double hi, double sign)
+{
+    double extreme = -std::numeric_limits<double>::infinity();
+    const int along = 1 - across;
+    for (const Polyline &wall : walls) {
+        for (size_t i = 1; i < wall.points.size(); ++i) {
+            const Vec2d a = unscale(wall.points[i - 1]);
+            const Vec2d b = unscale(wall.points[i]);
+            const double d = b[along] - a[along];
+            double t0 = 0., t1 = 1.;
+            if (std::abs(d) < EPSILON) {
+                if (a[along] < lo || a[along] > hi)
+                    continue;
+            } else {
+                const double u = (lo - a[along]) / d, v = (hi - a[along]) / d;
+                t0 = std::max(0., std::min(u, v));
+                t1 = std::min(1., std::max(u, v));
+                if (t0 > t1)
+                    continue;
+            }
+            extreme = std::max({extreme, sign * (a[across] + t0 * (b[across] - a[across])),
+                                         sign * (a[across] + t1 * (b[across] - a[across]))});
+        }
+    }
+    return extreme;
+}
+
+std::vector<Vec3f> plan_wipe_tower_side_scrape(const PrintConfig &config, const Polylines &wall,
+                                             const Polylines &obstacles, float top_z, float line_width, size_t sequence)
+{
+    if (!config.prime_tower_side_scrape.value || wall.empty())
+        return {};
+    const int across = config.prime_tower_side_scrape_face.value == SideScrapeFace::LeftRight ? 0 : 1;
+    const int along = 1 - across;
+    const double length = config.prime_tower_side_scrape_length.value;
+    const double height = config.prime_tower_side_scrape_height.value;
+    const double gap = config.prime_tower_side_scrape_wall_gap.value;
+    const double smear = config.prime_tower_side_scrape_along_length.value;
+    const double spacing = config.prime_tower_side_scrape_point_spacing.value;
+    if (length <= 0. || height <= 0. || gap < 0. || smear < 0. || spacing <= 0. || top_z <= height)
+        return {};
+    const double corner_margin = std::max(double(line_width), 0.5);
+    for (int side = 0; side < 2; ++side) {
+        const double sign = (sequence + side) % 2 == 0 ? 1. : -1.;
+        for (size_t i = 1; i < wall.front().points.size(); ++i) {
+            const Vec2d a = unscale(wall.front().points[i - 1]);
+            const Vec2d b = unscale(wall.front().points[i]);
+            if (std::abs(a[across] - b[across]) > EPSILON)
+                continue;
+            const double lo = std::min(a[along], b[along]) + corner_margin;
+            const double hi = std::max(a[along], b[along]) - corner_margin;
+            if (hi <= lo)
+                continue;
+            const double stroke = std::min(smear, hi - lo);
+            const size_t count = size_t(std::floor((hi - lo - stroke) / spacing)) + 1;
+            for (size_t attempt = 0; attempt < count; ++attempt) {
+                const double start = lo + ((sequence / 2 + attempt) % count) * spacing;
+                const double end = start + stroke;
+                const double surface = sign * a[across];
+                // The selected segment must be an exposed wall, not the inside of a rib.
+                if (side_scrape_wall_extreme(wall, across, start - corner_margin, end + corner_margin, sign) > surface + EPSILON)
+                    continue;
+                // Lower layers may protrude farther than the selected wall. Keep both the
+                // descent and the along-wall stroke outside them, without changing the tower.
+                if (side_scrape_wall_extreme(obstacles, across, start - corner_margin, end + corner_margin, sign) > surface + gap + EPSILON)
+                    continue;
+                const double contact = a[across] + sign * (0.5 * line_width + gap);
+                auto point = [across, along](double cross, double longitudinal, double z) {
+                    Vec3f p;
+                    p[across] = float(cross);
+                    p[along] = float(longitudinal);
+                    p.z() = float(z);
+                    return p;
+                };
+                return {point(contact + sign * length, start, top_z),
+                        point(contact + sign * length, start, top_z - height),
+                        point(contact, start, top_z), point(contact, end, top_z)};
+            }
+        }
+    }
+    return {};
+}
+
+void WipeTower::add_side_scrapes(const PrintConfig &config, std::vector<std::vector<ToolChangeResult>> &result) const
+{
+    if (!config.prime_tower_side_scrape.value || result.empty())
+        return;
+    if (config.prime_tower_skip_points.value)
+        throw SlicingError(L("Side scraping requires continuous prime tower walls. Disable Skip points."));
+    const bool compacted = wipe_tower_sparse_layers_skipped(config);
+    const std::vector<float> heights = compute_compacted_wipe_tower_z(result, float(config.z_offset.value));
+    struct PrintedWall {
+        float top;
+        const Polylines *walls;
+    };
+    std::vector<PrintedWall> printed;
+    size_t sequence = 0;
+    for (size_t layer = 0; layer < result.size(); ++layer) {
+        auto &changes = result[layer];
+        if (changes.empty() || wipe_tower_layer_is_combined_away(changes) || (compacted && wipe_tower_layer_is_sparse(changes)))
+            continue;
+        const auto wall = m_outer_wall.find(changes.front().print_z);
+        if (wall == m_outer_wall.end() || wall->second.empty())
+            throw SlicingError(L("Cannot find a printed prime tower wall for side scraping."));
+        const float top = compacted ? heights[layer] : changes.front().print_z + float(config.z_offset.value);
+        const float low = top - float(config.prime_tower_side_scrape_height.value);
+        // The chamfer above the brim can extend past the wall for several layers.
+        // Wait until the entire downward stroke clears it, without changing its geometry.
+        float floor = printed.empty() ? top : printed.front().top;
+        for (const PrintedWall &lower : printed)
+            if (lower.walls->size() > 1)
+                floor = std::max(floor, lower.top);
+        if (wall->second.size() > 1)
+            floor = top;
+        if (!printed.empty() && low > floor + m_perimeter_width) {
+            Polylines obstacles = wall->second;
+            for (const PrintedWall &lower : printed)
+                if (lower.top >= low - EPSILON)
+                    obstacles.insert(obstacles.end(), lower.walls->begin(), lower.walls->end());
+            for (ToolChangeResult &tcr : changes) {
+                if (!tcr.is_tool_change || tcr.initial_tool == tcr.new_tool || is_same_nozzle(tcr.initial_tool, tcr.new_tool, int(layer)))
+                    continue;
+                std::vector<Vec3f> path = plan_wipe_tower_side_scrape(config, *printed.back().walls, obstacles, top, m_perimeter_width, sequence++);
+                if (path.empty())
+                    throw SlicingError(L("No safe straight prime tower wall is available for side scraping. Change the selected walls or reduce the scraping distances."));
+                const Vec2f original_start = tcr.tool_change_start_pos;
+                path.emplace_back(original_start.x(), original_start.y(), top);
+                tcr.side_scrape_path = std::move(path);
+            }
+        }
+        printed.push_back({top, &wall->second});
+    }
+}
 
 bool wipe_tower_sparse_layers_skipped(const PrintConfig &config)
 {
@@ -2012,6 +2151,7 @@ WipeTower::WipeTower(const PrintConfig& config, int plate_idx, Vec3d plate_origi
     m_accel_to_decel_factor(config.accel_to_decel_factor.value),
     m_printable_height(config.extruder_printable_height.values),
     m_flat_ironing(config.prime_tower_flat_ironing.value),
+    m_enable_side_scrape(config.prime_tower_side_scrape.value),
     m_enable_tower_interface_features(config.enable_tower_interface_features.value),
     m_physical_extruder_map(config.physical_extruder_map.values),
     m_enable_arc_fitting(config.enable_arc_fitting.value == ArcFittingMode::Enabled)
@@ -3927,7 +4067,7 @@ WipeTower::ToolChangeResult WipeTower::finish_layer_new(bool extrude_perimeter, 
     // outer perimeter (always):
     // BBS
     float wipe_tower_depth = m_wipe_tower_depth;
-    if (m_wipe_tower_blocks.size() == 1) {
+    if (m_wipe_tower_blocks.size() == 1 && !m_enable_side_scrape) {
         wipe_tower_depth = m_layer_info->depth + m_perimeter_width;
     }
     box_coordinates wt_box(Vec2f(0.f, 0.f), m_wipe_tower_width, wipe_tower_depth);
@@ -4555,7 +4695,8 @@ void WipeTower::update_all_layer_depth(float wipe_tower_depth)
     if (m_wipe_tower_depth > 0)
         m_wipe_tower_depth += start_offset;
 
-    if (m_enable_wrapping_detection || m_enable_timelapse_print) {
+    // A descending scrape requires the same outer wall footprint on every printed layer.
+    if (m_enable_wrapping_detection || m_enable_timelapse_print || m_enable_side_scrape) {
         if (is_approx(m_wipe_tower_depth, 0.f))
             m_wipe_tower_depth = wipe_tower_depth;
         for (WipeTowerInfo &plan_info : m_plan) {
@@ -4960,7 +5101,7 @@ void WipeTower::generate_new(std::vector<std::vector<WipeTower::ToolChangeResult
         m_cur_layer_id = index++;
         set_layer(layer.z, layer.height, 0, false, layer.z == m_plan.back().z);
         if (m_layer_info->depth < m_perimeter_width) continue;
-        if (m_wipe_tower_blocks.size() == 1) {
+        if (m_wipe_tower_blocks.size() == 1 && !m_enable_side_scrape) {
             if (m_layer_info->depth < m_wipe_tower_depth - m_perimeter_width) {
                 // align y shift to perimeter width
                 float dy  = m_extra_spacing * m_perimeter_width;
@@ -5281,7 +5422,7 @@ WipeTower::ToolChangeResult WipeTower::only_generate_out_wall(bool is_new_mode)
     // BBS
 
     float wipe_tower_depth = m_layer_info->depth + m_perimeter_width;
-    if (is_new_mode && (m_enable_timelapse_print || m_enable_wrapping_detection))
+    if (is_new_mode && (m_enable_timelapse_print || m_enable_wrapping_detection || m_enable_side_scrape))
         wipe_tower_depth = m_wipe_tower_depth;
     box_coordinates wt_box(Vec2f(0.f, (m_current_shape == SHAPE_REVERSED ? m_layer_info->toolchanges_depth() : 0.f)), m_wipe_tower_width, wipe_tower_depth);
     wt_box = align_perimeter(wt_box);

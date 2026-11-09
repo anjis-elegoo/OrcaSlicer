@@ -1,10 +1,13 @@
 #include <algorithm>
+#include <cmath>
+#include "libslic3r/GCode/WipeTowerEstimate.hpp"
 #include <catch2/catch_all.hpp>
 
 #include "libslic3r/Config.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Polygon.hpp"
+#include "libslic3r/Polyline.hpp"
 #include <cstddef>
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
@@ -751,5 +754,280 @@ TEST_CASE("Without sparse layers the filament change starts at the tallest print
     for (const auto &[tower_z, printed_z] : tower_extrusions) {
         INFO("tower extrusion at Z " << tower_z << ", printed up to Z " << printed_z);
         CHECK(tower_z < printed_z - EPSILON);
+    }
+}
+
+
+static PrintConfig side_scrape_config()
+{
+    PrintConfig config;
+    config.prime_tower_side_scrape.value = true;
+    config.prime_tower_side_scrape_face.value = SideScrapeFace::FrontBack;
+    config.prime_tower_side_scrape_length.value = 2.;
+    config.prime_tower_side_scrape_height.value = 1.5;
+    config.prime_tower_side_scrape_wall_gap.value = 0.2;
+    config.prime_tower_side_scrape_point_spacing.value = 1.;
+    config.prime_tower_side_scrape_along_length.value = 2.;
+    return config;
+}
+
+static Polylines scrape_rectangle(double xmin, double ymin, double xmax, double ymax)
+{
+    return {Polyline(Points{Point::new_scale(xmin, ymin), Point::new_scale(xmax, ymin),
+                            Point::new_scale(xmax, ymax), Point::new_scale(xmin, ymax), Point::new_scale(xmin, ymin)})};
+}
+
+TEST_CASE("Side scraping descends outside the wall and returns to the tower top", "[WipeTower][SideScrape]")
+{
+    PrintConfig config = side_scrape_config();
+    const bool left_right = GENERATE(false, true);
+    config.prime_tower_side_scrape_face.value = left_right ? SideScrapeFace::LeftRight : SideScrapeFace::FrontBack;
+    const int across = left_right ? 0 : 1;
+    const int along = 1 - across;
+    const Polylines wall = scrape_rectangle(0., 0., 30., 20.);
+    for (size_t sequence = 0; sequence < 4; ++sequence) {
+        const auto path = plan_wipe_tower_side_scrape(config, wall, wall, 5.f, 0.5f, sequence);
+        REQUIRE(path.size() == 4);
+        const double sign = sequence % 2 == 0 ? 1. : -1.;
+        CHECK_THAT(path[0].z(), Catch::Matchers::WithinAbs(5., 1e-5));
+        CHECK_THAT(path[1].z(), Catch::Matchers::WithinAbs(3.5, 1e-5));
+        CHECK_THAT(path[2].z(), Catch::Matchers::WithinAbs(5., 1e-5));
+        CHECK_THAT(sign * (path[0][across] - path[2][across]), Catch::Matchers::WithinAbs(2., 1e-5));
+        CHECK_THAT(path[3][along] - path[2][along], Catch::Matchers::WithinAbs(2., 1e-5));
+        CHECK_THAT(path[2][across], Catch::Matchers::WithinAbs(sign > 0 ? (left_right ? 30.45 : 20.45) : -0.45, 1e-5));
+    }
+}
+
+TEST_CASE("Side scraping rejects lower walls that protrude into the stroke", "[WipeTower][SideScrape]")
+{
+    const PrintConfig config = side_scrape_config();
+    const Polylines wall = scrape_rectangle(0., 0., 30., 20.);
+    const Polylines flared_wall = scrape_rectangle(0., -3., 30., 23.);
+    CHECK(plan_wipe_tower_side_scrape(config, wall, flared_wall, 5.f, 0.5f, 0).empty());
+    CHECK(plan_wipe_tower_side_scrape(config, wall, wall, 1.f, 0.5f, 0).empty());
+}
+
+TEST_CASE("Side scraping uses the other wall when one side is obstructed", "[WipeTower][SideScrape]")
+{
+    const PrintConfig config = side_scrape_config();
+    const Polylines wall = scrape_rectangle(0., 0., 30., 20.);
+    const auto path = plan_wipe_tower_side_scrape(config, wall, scrape_rectangle(0., 0., 30., 23.), 5.f, 0.5f, 0);
+    REQUIRE_FALSE(path.empty());
+    CHECK(path.front().y() < 0.);
+}
+
+TEST_CASE("Disabled side scraping leaves the motion envelope unchanged", "[WipeTower][SideScrape]")
+{
+    PrintConfig config = side_scrape_config();
+    config.prime_tower_side_scrape.value = false;
+    const Polylines wall = scrape_rectangle(0., 0., 30., 20.);
+    CHECK(plan_wipe_tower_side_scrape(config, wall, wall, 5.f, 0.5f, 0).empty());
+    CHECK_THAT(wipe_tower_side_scrape_margin(config), Catch::Matchers::WithinAbs(0., 1e-8));
+}
+
+static DynamicPrintConfig side_scrape_print_config(bool two_nozzles)
+{
+    DynamicPrintConfig config = wipe_tower_toolchange_config("klipper");
+    config.set_deserialize_strict({
+        {"wipe_tower_type", "type1"}, {"prime_tower_side_scrape", "1"},
+        {"prime_tower_skip_points", "0"}, {"prime_tower_side_scrape_face", "left_right"},
+        {"prime_tower_side_scrape_speed", "50"}, {"prime_tower_side_scrape_height", "0.5"},
+        {"prime_tower_side_scrape_length", "2"}, {"prime_tower_side_scrape_wall_gap", "0.2"},
+        {"prime_tower_side_scrape_point_spacing", "1"}, {"prime_tower_side_scrape_along_length", "2"},
+        {"travel_speed_z", "5"}, {"machine_max_speed_z", "10"},
+        {"gcode_comments", "1"}, {"change_filament_gcode", "; CHANGE_NOZZLE\n"}});
+    if (two_nozzles) {
+        config.set_num_extruders(2);
+        config.set_deserialize_strict({
+            {"single_extruder_multi_material", "0"}, {"nozzle_diameter", "0.4,0.4"},
+            {"printer_extruder_id", "1,2"}, {"printer_extruder_variant", "Direct Drive Standard,Direct Drive Standard"},
+            {"extruder_printable_height", "0,0"}, {"filament_map_mode", "Manual"}, {"filament_map", "1,2"}});
+        size_flush_to_nozzles(config);
+    }
+    return config;
+}
+
+TEST_CASE("Nozzle changes scrape without extrusion and respect the Z speed limit", "[WipeTower][SideScrape]")
+{
+    const int layout = GENERATE(0, 1, 2); // shared nozzle, separate extruders, interchangeable nozzles
+    const bool two_nozzles = layout != 0;
+    const bool compacted = GENERATE(false, true);
+    DynamicPrintConfig config = side_scrape_print_config(layout == 1);
+    if (layout == 2) {
+        config.set_deserialize_strict({
+            {"extruder_max_nozzle_count", "2"}, {"extruder_nozzle_stats", "Standard#2"},
+            {"filament_map_mode", "Nozzle Manual"}, {"filament_map", "1,1"},
+            {"filament_nozzle_map", "0,1"}, {"filament_volume_map", "0,0"}});
+    }
+    config.set_deserialize_strict({{"wipe_tower_no_sparse_layers", compacted ? "1" : "0"}});
+    const std::string output = slice_with_prime_tower(config);
+    bool scraping = false;
+    size_t strokes = 0, descents = 0, ascents = 0;
+    GCodeReader parser;
+    parser.parse_buffer(output, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        if (line.raw().find("; SIDE_SCRAPE_START") != std::string::npos) {
+            scraping = true;
+            ++strokes;
+        } else if (line.raw().find("; SIDE_SCRAPE_END") != std::string::npos) {
+            scraping = false;
+        } else if (scraping && line.cmd_is("G1")) {
+            CHECK_FALSE(line.has_e());
+            if (line.has_z()) {
+                const double dz = line.z() - self.z();
+                const double dx = line.has_x() ? line.x() - self.x() : 0.;
+                const double dy = line.has_y() ? line.y() - self.y() : 0.;
+                const double length = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (length > EPSILON) {
+                    const double feedrate = line.has_f() ? line.f() : self.f();
+                    CHECK(std::abs(dz) / length * feedrate / 60. <= 5.01);
+                }
+                CHECK(line.z() > 0.);
+                if (dz < -EPSILON) ++descents;
+                if (dz > EPSILON) ++ascents;
+            }
+        }
+    });
+    if (two_nozzles) {
+        CHECK(strokes > 0);
+        CHECK(descents >= strokes);
+        CHECK(ascents >= strokes);
+    } else {
+        CHECK(strokes == 0);
+    }
+}
+
+
+TEST_CASE("Side scraping preserves object extrusion paths with rotation offsets and sparse layers", "[WipeTower][SideScrape]")
+{
+    const bool compacted = GENERATE(false, true);
+    DynamicPrintConfig config = side_scrape_print_config(true);
+    config.set_deserialize_strict({
+        {"wipe_tower_rotation_angle", "37"}, {"extruder_offset", "0x0,3x-2"}, {"z_offset", "0.15"},
+        {"wipe_tower_no_sparse_layers", compacted ? "1" : "0"}, {"layer_height", "0.2"},
+        {"outer_wall_filament_id", "1"}, {"inner_wall_filament_id", "1"}, {"top_surface_filament_id", "2"},
+        {"timelapse_type", "0"}, {"enable_wrapping_detection", "0"}, {"raft_layers", "0"}, {"top_shell_layers", "10"}});
+    auto slice = [&config]() {
+        TriangleMesh tall = make_cube(10., 10., 10.);
+        tall.translate(120.f, 120.f, 0.f);
+        TriangleMesh low = make_cube(10., 10., 4.);
+        low.translate(150.f, 120.f, 0.f);
+        Print print;
+        Model model;
+        init_print({std::move(tall), std::move(low)}, print, model, config, nullptr, false);
+        model.objects[1]->config.set("outer_wall_filament_id", 2);
+        model.objects[1]->config.set("inner_wall_filament_id", 2);
+        print.apply(model, config);
+        return gcode(print);
+    };
+    const std::string scraped = slice();
+    REQUIRE_THAT(scraped, Catch::Matchers::ContainsSubstring("; SIDE_SCRAPE_START"));
+    config.set_deserialize_strict({{"prime_tower_side_scrape", "0"}});
+    const std::string plain = slice();
+    auto extrusions = [](const std::string &code) {
+        std::vector<Vec3d> points;
+        GCodeReader reader;
+        bool in_tower = false;
+        reader.parse_buffer(code, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            if (line.raw().find(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Wipe_Tower_Start)) != std::string::npos)
+                in_tower = true;
+            if (line.raw().find(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Wipe_Tower_End)) != std::string::npos)
+                in_tower = false;
+            if (!in_tower && line.extruding(self) && (line.has_x() || line.has_y()))
+                points.emplace_back(line.has_x() ? line.x() : self.x(), line.has_y() ? line.y() : self.y(),
+                                    line.has_z() ? line.z() : self.z());
+        });
+        return points;
+    };
+    const auto expected = extrusions(plain);
+    const auto actual = extrusions(scraped);
+    REQUIRE_FALSE(expected.empty());
+    REQUIRE(actual.size() == expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        INFO("extrusion " << i << ", compacted " << compacted);
+        CHECK_THAT((actual[i] - expected[i]).norm(), Catch::Matchers::WithinAbs(0., 0.002));
+    }
+    if (compacted) {
+        bool above_gap = false, scraping = false;
+        size_t low_scrapes = 0;
+        GCodeReader reader;
+        reader.parse_buffer(scraped, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+            if (line.raw().find("; CHANGE_NOZZLE") != std::string::npos)
+                above_gap = self.z() > 8.;
+            if (line.raw().find("; SIDE_SCRAPE_START") != std::string::npos)
+                scraping = true;
+            else if (line.raw().find("; SIDE_SCRAPE_END") != std::string::npos)
+                scraping = false;
+            else if (above_gap && scraping && line.has_z() && line.z() < 6.)
+                ++low_scrapes;
+        });
+        CHECK(low_scrapes > 0);
+    }
+}
+
+
+TEST_CASE("Type 2 ignores side scraping settings retained from Type 1", "[WipeTower][Type2SideScrape]")
+{
+    DynamicPrintConfig config = side_scrape_print_config(true);
+    Print print;
+    Model model;
+    init_print({cube(10)}, print, model, config);
+    print.apply(model, config);
+    REQUIRE_THAT(gcode(print), Catch::Matchers::ContainsSubstring("; SIDE_SCRAPE_START"));
+    config.set_deserialize_strict({
+        {"wipe_tower_type", "type2"}, {"prime_tower_skip_points", "1"},
+        {"prime_tower_side_scrape_length", "20"}, {"prime_tower_side_scrape_height", "10"},
+        {"prime_tower_side_scrape_along_length", "50"}});
+    CHECK_THAT(wipe_tower_side_scrape_margin(config), Catch::Matchers::WithinAbs(0., 1e-8));
+    print.apply(model, config);
+    const std::string retained = gcode(print);
+    CHECK_THAT(retained, !Catch::Matchers::ContainsSubstring("; SIDE_SCRAPE_START"));
+    const std::string retained_tower = wipe_tower_regions(retained);
+    REQUIRE_FALSE(retained_tower.empty());
+    config.set_deserialize_strict({{"prime_tower_side_scrape", "0"}});
+    CHECK(retained_tower == wipe_tower_regions(slice_with_prime_tower(config)));
+}
+
+TEST_CASE("Side scraping shortens an oversized along-wall stroke", "[WipeTower][SideScrape]")
+{
+    PrintConfig config = side_scrape_config();
+    config.prime_tower_side_scrape_along_length.value = 50.;
+    const bool left_right = GENERATE(false, true);
+    config.prime_tower_side_scrape_face.value = left_right ? SideScrapeFace::LeftRight : SideScrapeFace::FrontBack;
+    const Polylines wall = scrape_rectangle(0., 0., 20., 20.);
+    for (size_t sequence = 0; sequence < 4; ++sequence) {
+        const auto path = plan_wipe_tower_side_scrape(config, wall, wall, 5.f, 0.5f, sequence);
+        REQUIRE(path.size() == 4);
+        const int along = left_right ? 1 : 0;
+        CHECK_THAT(path[3][along] - path[2][along], Catch::Matchers::WithinAbs(19., 1e-5));
+        CHECK(path[2][along] >= 0.5f);
+        CHECK(path[3][along] <= 19.5f);
+    }
+}
+
+TEST_CASE("Side scraping keeps tower walls aligned across layers", "[WipeTower][SideScrape]")
+{
+    const bool rib_wall = GENERATE(false, true);
+    const bool force_type1 = GENERATE(false, true);
+    DynamicPrintConfig config = side_scrape_print_config(true);
+    config.set_deserialize_strict({{"wipe_tower_wall_type", rib_wall ? "rib" : "rectangle"},
+                                   {"prime_tower_side_scrape_along_length", "50"}});
+    if (force_type1)
+        config.set_deserialize_strict({{"wipe_tower_type", "type2"}});
+    Print print;
+    Model model;
+    init_print({cube(10)}, print, model, config);
+    print.apply(model, config);
+    print.is_BBL_printer() = force_type1;
+    REQUIRE(print.wipe_tower_type() == WipeTowerType::Type1);
+    REQUIRE_THAT(gcode(print), Catch::Matchers::ContainsSubstring("; SIDE_SCRAPE_START"));
+    const auto &walls = print.get_fake_wipe_tower().outer_wall;
+    REQUIRE(walls.size() > 2);
+    const BoundingBox expected = get_extents(Polylines{walls.begin()->second.front()});
+    for (const auto &[z, contours] : walls) {
+        INFO("tower layer " << z);
+        REQUIRE_FALSE(contours.empty());
+        const BoundingBox actual = get_extents(Polylines{contours.front()});
+        CHECK(actual.min == expected.min);
+        CHECK(actual.max == expected.max);
     }
 }

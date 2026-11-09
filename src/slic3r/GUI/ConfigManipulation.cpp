@@ -1189,6 +1189,10 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
         && preset_bundle->printers.get_edited_preset().config.has("enable_belt_purge_tower")
         && preset_bundle->printers.get_edited_preset().config.opt_bool("enable_belt_purge_tower");
     toggle_line("belt_purge_tower_width", have_belt_purge_tower, -1, _L("Enable the belt purge tower in the belt printer settings to use this setting."));
+    const bool side_scrape_available = have_prime_tower && !supports_wipe_tower_2 && !is_belt_printer;
+    toggle_line("prime_tower_side_scrape", side_scrape_available, -1, _L("Enable a Type 1 prime tower on a non-belt printer to use side scraping."));
+    for (auto key : {"prime_tower_side_scrape_face", "prime_tower_side_scrape_length", "prime_tower_side_scrape_height", "prime_tower_side_scrape_speed", "prime_tower_side_scrape_wall_gap", "prime_tower_side_scrape_point_spacing", "prime_tower_side_scrape_along_length"})
+        toggle_line(key, side_scrape_available && config->opt_bool("prime_tower_side_scrape"), -1, _L("Enable side scraping to use this setting."));
     const wxString prime_tower_reason = _L("Enable the prime tower on a non-belt printer to use this setting.");
     for (auto el : {"prime_tower_width", "prime_tower_brim_width", "prime_tower_skip_points", "wipe_tower_wall_type", "prime_tower_infill_gap","prime_tower_enable_framework", "enable_tower_interface_features"})
         toggle_line(el, have_prime_tower && !is_belt_printer, -1, prime_tower_reason);

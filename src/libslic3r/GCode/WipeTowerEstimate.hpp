@@ -28,6 +28,9 @@ struct WipeTowerFootprint
 // the GUI and CLI placement can resolve it without a Print.
 WipeTowerType resolve_wipe_tower_type(const ConfigBase &config);
 
+// Extra clearance reserved for the nozzle's dry side-scraping motion. Zero when disabled.
+double wipe_tower_side_scrape_margin(const ConfigBase &config);
+
 // First-layer outline of an estimated tower in tower-local scaled coordinates, brim excluded:
 // the body box, or for a Type2 cone wall the box unioned with the cone's base. The preview,
 // the placement margin and validation all take the outline from here so they cannot disagree
