@@ -106,7 +106,8 @@ bool check_filament_printable_after_group(const std::vector<unsigned int> &used_
         int printable_status = print_config->filament_printable.get_at(filament_id);
         int extruder_idx = filament_maps[filament_id];
         if (!(printable_status >> extruder_idx & 1)) {
-            std::string error_msg = _L("Grouping error: ") + filament_type + _L(" can not be placed in extruder ") + std::to_string(extruder_idx + 1);
+            // TRN %1% is the filament type, %2% the extruder number counted from 1.
+            std::string error_msg = Slic3r::format(_L("Grouping error: %1% cannot be placed in extruder %2%"), filament_type, extruder_idx + 1);
             throw Slic3r::RuntimeError(error_msg);
         }
     }

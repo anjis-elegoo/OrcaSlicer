@@ -3946,7 +3946,9 @@ int CLI::run(int argc, char **argv)
 
             // set multiplier to 1?
             std::vector<double>& flush_multipliers = m_print_config.option<ConfigOptionFloats>("flush_multiplier", true)->values;
-            flush_multipliers.resize(new_extruder_count, 1.f);
+            const auto* multi_extruder_multi_filament = m_print_config.option<ConfigOptionBool>("multi_extruder_multi_filament");
+            flush_multipliers.resize(new_extruder_count, multi_extruder_multi_filament && multi_extruder_multi_filament->value ?
+                                                             FullPrintConfig::defaults().flush_multiplier.get_at(0) : 1.f);
 
             std::vector<int> nozzle_flush_dataset(new_extruder_count, 0);
             {

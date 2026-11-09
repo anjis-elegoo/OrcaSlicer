@@ -7,6 +7,7 @@
 #include <vector>
 #include <wx/string.h>
 #include <wx/event.h>
+#include <wx/scrolwin.h>
 #include "CapsuleButton.hpp"
 #include "Widgets/CheckBox.hpp"
 
@@ -79,6 +80,7 @@ private:
     void update_panel_status(PageType page);
 
  private:
+    wxScrolledWindow* m_panel_scroll;
     FilamentMapManualPanel* m_manual_map_panel;
     FilamentMapAutoPanel* m_auto_map_panel;
     FilamentMapDefaultPanel* m_default_map_panel;

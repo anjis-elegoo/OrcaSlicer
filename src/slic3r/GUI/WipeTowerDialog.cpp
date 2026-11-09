@@ -358,7 +358,8 @@ wxString WipingDialog::BuildTableObjStr()
         auto fm = get_flush_volumes_matrix(raw_matrix_data, idx, nozzle_num);
         flush_matrixs.emplace_back(extract_physical_sub_matrix(fm, full_n, m_physical_indices));
     }
-    flush_multiplier.resize(nozzle_num, 1);
+    flush_multiplier.resize(nozzle_num, full_config.opt_bool("multi_extruder_multi_filament") ?
+                                            FullPrintConfig::defaults().flush_multiplier.get_at(0) : 1.);
 
     std::vector<std::vector<float>> default_matrixs;
     for (int idx = 0; idx < nozzle_num; ++idx) {
@@ -372,6 +373,19 @@ wxString WipingDialog::BuildTableObjStr()
     obj["flush_multiplier"] = flush_multiplier;
     obj["extruder_num"] = nozzle_num;
     obj["filament_colors"] = filament_colors;
+    {
+        json labels = json::array();
+        const bool bambu_left_right = wxGetApp().preset_bundle->is_bbl_vendor() && nozzle_num == 2;
+        if (bambu_left_right) {
+            const std::string pt = wxGetApp().preset_bundle->printers.get_edited_preset().get_printer_type(wxGetApp().preset_bundle);
+            labels.push_back(into_u8(_L(DevPrinterConfigUtil::get_toolhead_display_name(pt, DEPUTY_EXTRUDER_ID, ToolHeadComponent::Extruder, ToolHeadNameCase::SentenceCase))));
+            labels.push_back(into_u8(_L(DevPrinterConfigUtil::get_toolhead_display_name(pt, MAIN_EXTRUDER_ID, ToolHeadComponent::Extruder, ToolHeadNameCase::SentenceCase))));
+        } else {
+            for (int idx = 0; idx < nozzle_num; ++idx)
+                labels.push_back(into_u8(wxString::Format(_L("Extruder %d"), idx + 1)));
+        }
+        obj["extruder_labels"] = labels;
+    }
     obj["flush_volume_matrixs"] = json::array();
     obj["min_flush_volumes"] = json::array();
     obj["max_flush_volumes"] = json::array();
@@ -396,7 +410,7 @@ wxString WipingDialog::BuildTableObjStr()
         obj["max_flush_volumes"].push_back(m_max_flush_volume);
     }
 
-    auto obj_str = obj.dump();
+    auto obj_str = obj.dump(-1, ' ', true);
     return obj_str;
 }
 
@@ -541,13 +555,13 @@ WipingDialog::WipingDialog(wxWindow* parent, const int max_flush_volume) :
                 auto table_obj_str = BuildTableObjStr();
                 auto text_obj_str = BuildTextObjStr(true);
                 CallAfter([table_obj_str, text_obj_str, this] {
-                    wxString script1 = wxString::Format("buildTable(%s)", table_obj_str);
+                    wxString script1 = "buildTable(" + table_obj_str + ")";
                     m_webview->RunScript(script1);
-                    wxString script2 = wxString::Format("buildText(%s)", text_obj_str);
+                    wxString script2 = "buildText(" + text_obj_str + ")";
                     bool result = m_webview->RunScript(script2);
                     if (!result) {
                         BOOST_LOG_TRIVIAL(error) << __FUNCTION__<< "Failed to run buildText, retry without multi language";
-                        wxString script3 = wxString::Format("buildText(%s)", BuildTextObjStr(false));
+                        wxString script3 = "buildText(" + BuildTextObjStr(false) + ")";
                         m_webview->RunScript(script3);
                     }
                     });
@@ -561,7 +575,7 @@ WipingDialog::WipingDialog(wxWindow* parent, const int max_flush_volume) :
                 CallAfter([obj, this] {
                     std::string flush_volume_matrix_str = obj["flush_volume_matrix"].dump();
                     std::string extruder_id_str = std::to_string(obj["extruder_id"].get<int>());
-                    wxString script = wxString::Format("updateTable(%s,%s)", flush_volume_matrix_str, extruder_id_str);
+                    wxString script = "updateTable(" + wxString::FromUTF8(flush_volume_matrix_str) + "," + extruder_id_str + ")";
                     m_webview->RunScript(script);
                     });
             }
